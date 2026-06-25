@@ -7,8 +7,12 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .models import EquipmentItem, ExportRequest, FloorPlan, Placement
-from .validation import _clearance_rect, _equipment_rect, _rotated_dims
+try:
+    from .models import EquipmentItem, ExportRequest, FloorPlan, Placement
+    from .validation import _clearance_rect, _equipment_rect, _rotated_dims
+except ImportError:
+    from models import EquipmentItem, ExportRequest, FloorPlan, Placement
+    from validation import _clearance_rect, _equipment_rect, _rotated_dims
 
 if TYPE_CHECKING:
     from .models import EquipmentZone

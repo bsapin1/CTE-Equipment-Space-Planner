@@ -6,7 +6,10 @@ from typing import BinaryIO
 
 import pandas as pd
 
-from .models import EquipmentItem
+try:
+    from .models import EquipmentItem
+except ImportError:
+    from models import EquipmentItem
 
 REQUIRED = {"id", "name", "width_ft", "depth_ft"}
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm")

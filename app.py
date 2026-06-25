@@ -4,20 +4,31 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
-from server.config import resolve_gemini_api_key
-from server.csv_parser import equipment_to_dataframe, parse_equipment_file
-from server.layout_engine import generate_layout
-from server.models import EquipmentZone, ExportRequest, FloorPlan, Opening
-from server.renderer import render_layout_png
-
 ROOT = Path(__file__).resolve().parent
-TEMPLATES = ROOT / "templates"
+
+# Support flat GitHub uploads (all .py files at repo root) and normal server/ layout
+if (ROOT / "server" / "config.py").exists():
+    from server.config import resolve_gemini_api_key
+    from server.csv_parser import equipment_to_dataframe, parse_equipment_file
+    from server.layout_engine import generate_layout
+    from server.models import EquipmentZone, ExportRequest, FloorPlan, Opening
+    from server.renderer import render_layout_png
+else:
+    sys.path.insert(0, str(ROOT))
+    from config import resolve_gemini_api_key
+    from csv_parser import equipment_to_dataframe, parse_equipment_file
+    from layout_engine import generate_layout
+    from models import EquipmentZone, ExportRequest, FloorPlan, Opening
+    from renderer import render_layout_png
+
+TEMPLATES = ROOT / "templates" if (ROOT / "templates").is_dir() else ROOT
 
 st.set_page_config(
     page_title="CTE Equipment Space Planner",

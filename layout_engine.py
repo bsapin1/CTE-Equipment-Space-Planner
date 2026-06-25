@@ -8,15 +8,26 @@ from typing import Any
 
 import google.generativeai as genai
 
-from .models import (
-    EquipmentItem,
-    EquipmentZone,
-    FloorPlan,
-    LayoutIssue,
-    LayoutResult,
-    Placement,
-)
-from .validation import compute_fit_metrics, validate_layout
+try:
+    from .models import (
+        EquipmentItem,
+        EquipmentZone,
+        FloorPlan,
+        LayoutIssue,
+        LayoutResult,
+        Placement,
+    )
+    from .validation import compute_fit_metrics, validate_layout
+except ImportError:
+    from models import (
+        EquipmentItem,
+        EquipmentZone,
+        FloorPlan,
+        LayoutIssue,
+        LayoutResult,
+        Placement,
+    )
+    from validation import compute_fit_metrics, validate_layout
 
 GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
 
@@ -72,7 +83,10 @@ def _parse_gemini_json(text: str) -> dict[str, Any]:
 
 
 def _call_gemini(api_key: str, prompt: str) -> dict[str, Any]:
-    from .config import DEFAULT_GEMINI_MODEL
+    try:
+        from .config import DEFAULT_GEMINI_MODEL
+    except ImportError:
+        from config import DEFAULT_GEMINI_MODEL
 
     genai.configure(api_key=api_key)
     last_error: Exception | None = None

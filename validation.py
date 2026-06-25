@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Placement
+try:
+    from .models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Placement
+except ImportError:
+    from models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Placement
 
 
 @dataclass
