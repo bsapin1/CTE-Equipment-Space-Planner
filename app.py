@@ -17,17 +17,19 @@ ROOT = Path(__file__).resolve().parent
 if (ROOT / "server" / "config.py").exists():
     from server.config import resolve_gemini_api_key
     from server.csv_parser import equipment_to_dataframe, parse_equipment_file
+    from server.equipment_ai import smart_parse_equipment
     from server.floorplan_vision import analyze_floor_plan_drawing
     from server.layout_engine import generate_layout
-    from server.models import EquipmentZone, ExportRequest, FloorPlan, Opening
+    from server.models import EquipmentItem, EquipmentZone, ExportRequest, FloorPlan, Opening
     from server.renderer import render_layout_png
 else:
     sys.path.insert(0, str(ROOT))
     from config import resolve_gemini_api_key
     from csv_parser import equipment_to_dataframe, parse_equipment_file
+    from equipment_ai import smart_parse_equipment
     from floorplan_vision import analyze_floor_plan_drawing
     from layout_engine import generate_layout
-    from models import EquipmentZone, ExportRequest, FloorPlan, Opening
+    from models import EquipmentItem, EquipmentZone, ExportRequest, FloorPlan, Opening
     from renderer import render_layout_png
 
 TEMPLATES = ROOT / "templates" if (ROOT / "templates").is_dir() else ROOT
@@ -338,20 +340,81 @@ with col_fp:
 
 with col_eq:
     st.subheader("2. Equipment List")
+
+    eq_mode = st.radio(
+        "Equipment parsing mode",
+        ["Smart parse (Gemini)", "Strict columns"],
+        horizontal=True,
+        help=(
+            "Smart parse lets Gemini read any spreadsheet layout and map it to the fields "
+            "the tool needs. Strict columns requires the exact template headers."
+        ),
+        label_visibility="collapsed",
+    )
+
     eq_file = st.file_uploader("Upload equipment spreadsheet (CSV or Excel)", type=["csv", "xlsx", "xlsm"])
-    if eq_file:
-        try:
-            equipment = parse_equipment_file(eq_file, eq_file.name)
+
+    if eq_file and st.session_state.get("ai_equipment_file") != eq_file.name:
+        st.session_state.pop("ai_equipment", None)
+        st.session_state.pop("ai_equipment_notes", None)
+        st.session_state["ai_equipment_file"] = eq_file.name
+
+    if eq_mode == "Smart parse (Gemini)":
+        eq_instructions = st.text_area(
+            "Instructions for reading the spreadsheet (optional)",
+            height=110,
+            placeholder=(
+                "Example: Dimensions are in inches. 'Footprint' column is width x depth. "
+                "Treat the 'Location' column as wall preference. Ignore the pricing columns. "
+                "Quantity is in the 'Count' column."
+            ),
+            help="Tell Gemini about units, which columns mean what, rows to ignore, etc.",
+            key="eq_instructions",
+        )
+
+        if eq_file and st.button("Analyze spreadsheet", type="secondary", use_container_width=True):
+            if not api_key:
+                st.error("Gemini API key is required for smart parsing. Add it in Streamlit Secrets.")
+            else:
+                with st.spinner("Analyzing spreadsheet with Gemini…"):
+                    try:
+                        parsed, notes = smart_parse_equipment(
+                            io.BytesIO(eq_file.getvalue()),
+                            eq_file.name,
+                            api_key,
+                            eq_instructions,
+                        )
+                        st.session_state["ai_equipment"] = [e.model_dump() for e in parsed]
+                        st.session_state["ai_equipment_notes"] = notes
+                    except Exception as exc:
+                        st.error(f"Smart parse failed: {exc}")
+
+        if "ai_equipment" in st.session_state:
+            equipment = [EquipmentItem.model_validate(e) for e in st.session_state["ai_equipment"]]
             st.success(
-                f"Loaded **{len(equipment)}** equipment types "
+                f"Interpreted **{len(equipment)}** equipment types "
                 f"({sum(e.qty for e in equipment)} total units)"
             )
-        except Exception as exc:
-            st.error(f"CSV error: {exc}")
-    elif st.button("Load sample equipment"):
+            notes = st.session_state.get("ai_equipment_notes", "")
+            if notes:
+                st.markdown(f"**Mapping notes:** {notes}")
+            st.caption("Review and edit the interpreted data below before generating the layout.")
+
+    else:
+        if eq_file:
+            try:
+                equipment = parse_equipment_file(eq_file, eq_file.name)
+                st.success(
+                    f"Loaded **{len(equipment)}** equipment types "
+                    f"({sum(e.qty for e in equipment)} total units)"
+                )
+            except Exception as exc:
+                st.error(f"CSV error: {exc}")
+
+    if not eq_file and st.button("Load sample equipment"):
         st.session_state["use_sample_equipment"] = True
 
-    if st.session_state.get("use_sample_equipment") and not eq_file:
+    if st.session_state.get("use_sample_equipment") and not eq_file and equipment is None:
         try:
             equipment = parse_equipment_file(io.BytesIO(load_sample_equipment_bytes()), "sample-equipment.csv")
             st.success(
@@ -361,7 +424,36 @@ with col_eq:
             st.error(str(exc))
 
     if equipment:
-        st.dataframe(equipment_to_dataframe(equipment), use_container_width=True, height=220)
+        edited_df = st.data_editor(
+            equipment_to_dataframe(equipment),
+            use_container_width=True,
+            height=260,
+            num_rows="dynamic",
+            key="equipment_editor",
+        )
+        try:
+            equipment = [
+                EquipmentItem(
+                    id=str(r["id"]).strip() or f"EQ-{i + 1:03d}",
+                    name=str(r["name"]).strip(),
+                    width_ft=float(r["width_ft"]),
+                    depth_ft=float(r["depth_ft"]),
+                    qty=max(1, int(r["qty"])),
+                    clearance_front_ft=float(r["clearance_front_ft"]),
+                    clearance_rear_ft=float(r["clearance_rear_ft"]),
+                    clearance_left_ft=float(r["clearance_left_ft"]),
+                    clearance_right_ft=float(r["clearance_right_ft"]),
+                    wall_preferred=(str(r["wall_preferred"]).lower().strip()
+                                    if str(r["wall_preferred"]).lower().strip() in ("yes", "no", "any") else "any"),
+                    adjacency=[s.strip() for s in str(r["adjacency"]).replace("|", ";").split(";") if s.strip()],
+                    category=str(r["category"]).strip() or "general",
+                    notes=str(r["notes"]).strip() if r.get("notes") is not None else "",
+                )
+                for i, r in enumerate(edited_df.to_dict(orient="records"))
+                if str(r.get("name", "")).strip()
+            ]
+        except (ValueError, TypeError, KeyError) as exc:
+            st.warning(f"Some edited rows are invalid and were ignored: {exc}")
 
 st.divider()
 
