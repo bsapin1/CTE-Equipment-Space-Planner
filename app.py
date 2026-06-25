@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent
 if (ROOT / "server" / "config.py").exists():
     from server.config import resolve_gemini_api_key
     from server.csv_parser import equipment_to_dataframe, parse_equipment_file
+    from server.floorplan_vision import analyze_floor_plan_drawing
     from server.layout_engine import generate_layout
     from server.models import EquipmentZone, ExportRequest, FloorPlan, Opening
     from server.renderer import render_layout_png
@@ -24,6 +25,7 @@ else:
     sys.path.insert(0, str(ROOT))
     from config import resolve_gemini_api_key
     from csv_parser import equipment_to_dataframe, parse_equipment_file
+    from floorplan_vision import analyze_floor_plan_drawing
     from layout_engine import generate_layout
     from models import EquipmentZone, ExportRequest, FloorPlan, Opening
     from renderer import render_layout_png
@@ -242,12 +244,79 @@ with col_fp:
     st.subheader("1. Floor Plan")
     fp_mode = st.radio(
         "Floor plan input",
-        ["Visual editor", "Upload JSON"],
+        ["Upload drawing", "Visual editor", "Upload JSON"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if fp_mode == "Upload JSON":
+    if fp_mode == "Upload drawing":
+        st.caption("Upload a floor plan image or PDF. Gemini will read the drawing and extract room dimensions, zones, doors, and windows.")
+        drawing_file = st.file_uploader(
+            "Floor plan drawing",
+            type=["jpg", "jpeg", "png", "pdf"],
+            help="JPG, PNG, or PDF",
+        )
+        reading_instructions = st.text_area(
+            "Instructions for reading the drawing (optional)",
+            height=120,
+            placeholder=(
+                "Example: North is up. The main shop area is the large open space on the left. "
+                "Door is on the south wall. Dimensions are in feet — room is 42' x 28'. "
+                "Do not use the storage closet in the northeast corner as equipment space."
+            ),
+            help="Tell Gemini how to interpret labels, scale, north arrow, which areas are for equipment, etc.",
+        )
+
+        if drawing_file:
+            st.session_state["drawing_bytes"] = drawing_file.getvalue()
+            st.session_state["drawing_name"] = drawing_file.name
+            mime = drawing_file.type or ""
+            if mime.startswith("image/") or drawing_file.name.lower().endswith((".jpg", ".jpeg", ".png")):
+                st.image(st.session_state["drawing_bytes"], caption="Uploaded drawing", use_container_width=True)
+
+            if st.button("Analyze drawing", type="secondary", use_container_width=True):
+                if not api_key:
+                    st.error("Gemini API key is required to analyze drawings. Add it in Streamlit Secrets.")
+                else:
+                    with st.spinner("Analyzing floor plan with Gemini…"):
+                        try:
+                            fp, notes = analyze_floor_plan_drawing(
+                                st.session_state["drawing_bytes"],
+                                st.session_state["drawing_name"],
+                                api_key,
+                                reading_instructions,
+                            )
+                            st.session_state["drawing_floor_plan"] = fp
+                            st.session_state["drawing_analysis_notes"] = notes
+                            st.session_state["drawing_filename"] = drawing_file.name
+                        except Exception as exc:
+                            st.error(f"Analysis failed: {exc}")
+
+        if "drawing_floor_plan" in st.session_state:
+            floor_plan = st.session_state["drawing_floor_plan"]
+            st.success(
+                f"Analyzed: **{floor_plan.name}** ({floor_plan.width_ft}' × {floor_plan.depth_ft}') "
+                f"— {len(floor_plan.equipment_zones)} equipment zone(s)"
+            )
+            notes = st.session_state.get("drawing_analysis_notes", "")
+            if notes:
+                st.markdown(f"**Analysis:** {notes}")
+            with st.expander("Extracted floor plan JSON (review or edit)"):
+                edited = st.text_area(
+                    "Floor plan JSON",
+                    value=floor_plan.model_dump_json(indent=2),
+                    height=220,
+                    key="drawing_fp_json_edit",
+                )
+                if st.button("Apply JSON edits", key="apply_drawing_json"):
+                    try:
+                        floor_plan = parse_floor_plan_json(edited)
+                        st.session_state["drawing_floor_plan"] = floor_plan
+                        st.success("Floor plan updated.")
+                    except Exception as exc:
+                        st.error(f"Invalid JSON: {exc}")
+
+    elif fp_mode == "Upload JSON":
         json_file = st.file_uploader("Upload floor plan JSON", type=["json"])
         if st.button("Load sample floor plan", key="load_sample_fp"):
             st.session_state["fp_json_text"] = json.dumps(load_sample_floor_plan(), indent=2)
@@ -297,6 +366,8 @@ with col_eq:
 st.divider()
 
 if st.button("Generate Test Layout", type="primary", use_container_width=True):
+    if floor_plan is None and "drawing_floor_plan" in st.session_state:
+        floor_plan = st.session_state["drawing_floor_plan"]
     if floor_plan is None:
         st.error("Define or upload a floor plan first.")
         st.stop()
