@@ -1,0 +1,30 @@
+{
+  "name": "Sample CTE Classroom",
+  "width_ft": 40,
+  "depth_ft": 30,
+  "doors": [
+    { "wall": "south", "offset_ft": 16, "width_ft": 3 }
+  ],
+  "windows": [
+    { "wall": "north", "offset_ft": 8, "width_ft": 6 },
+    { "wall": "north", "offset_ft": 24, "width_ft": 6 }
+  ],
+  "equipment_zones": [
+    {
+      "id": "shop-main",
+      "label": "Shop / Lab Area",
+      "x_ft": 2,
+      "y_ft": 2,
+      "width_ft": 36,
+      "depth_ft": 22
+    },
+    {
+      "id": "storage",
+      "label": "Storage",
+      "x_ft": 2,
+      "y_ft": 25,
+      "width_ft": 12,
+      "depth_ft": 3
+    }
+  ]
+}

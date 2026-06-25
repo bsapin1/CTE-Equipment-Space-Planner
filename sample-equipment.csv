@@ -1,0 +1,8 @@
+id,name,width_ft,depth_ft,qty,clearance_front_ft,clearance_rear_ft,clearance_left_ft,clearance_right_ft,wall_preferred,adjacency,category,notes
+WLD-001,Wire Feed Welder,2.5,3.5,2,3.0,1.0,2.0,2.0,yes,,welding,Against wall with ventilation
+CUT-001,Plasma Cutting Table,4.0,6.0,1,4.0,2.0,2.0,2.0,no,WLD-001,cutting,Needs power and exhaust
+BEN-001,Workbench,6.0,2.5,3,3.0,1.0,1.5,1.5,yes,,workbench,Student workstations
+GRD-001,Pedestal Grinder,2.0,2.5,1,3.0,1.0,2.0,2.0,yes,,grinding,Wall mounted preferred
+SAW-001,Band Saw,2.5,4.0,1,3.0,1.5,2.0,2.0,yes,,saw,Point away from circulation
+VNT-001,Exhaust Ventilation Unit,1.5,1.5,1,2.0,0.5,1.0,1.0,yes,WLD-001,HVAC,Near welding stations
+CAB-001,Tool Storage Cabinet,3.0,1.5,2,2.0,0.5,1.0,1.0,yes,,storage,Along perimeter wall

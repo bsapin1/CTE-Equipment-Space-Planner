@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CTE Equipment Space Planner</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>CTE Equipment Space Planner</h1>
+      <p class="subtitle">Test-fit equipment layouts in a blank CTE classroom floor plan</p>
+    </div>
+    <div class="api-key-box">
+      <label for="gemini-key">Gemini API Key</label>
+      <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off" />
+      <small>Stored locally in your browser. <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Get a key</a></small>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel inputs">
+      <h2>1. Floor Plan</h2>
+      <p class="hint">Define the classroom dimensions, doors, windows, and equipment zones — or upload a JSON floor plan.</p>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="editor">Visual Editor</button>
+        <button class="tab" data-tab="json">JSON Upload</button>
+      </div>
+
+      <div id="tab-editor" class="tab-panel active">
+        <div class="form-grid">
+          <label>Room name <input id="room-name" value="CTE Classroom" /></label>
+          <label>Width (ft) <input id="room-width" type="number" value="40" min="10" step="1" /></label>
+          <label>Depth (ft) <input id="room-depth" type="number" value="30" min="10" step="1" /></label>
+        </div>
+
+        <div class="form-grid">
+          <label>Door wall
+            <select id="door-wall"><option value="south">South</option><option value="north">North</option><option value="east">East</option><option value="west">West</option></select>
+          </label>
+          <label>Door offset (ft) <input id="door-offset" type="number" value="16" min="0" step="0.5" /></label>
+          <label>Door width (ft) <input id="door-width" type="number" value="3" min="2" step="0.5" /></label>
+        </div>
+
+        <div class="form-grid">
+          <label>Window wall
+            <select id="win-wall"><option value="north">North</option><option value="south">South</option><option value="east">East</option><option value="west">West</option></select>
+          </label>
+          <label>Window 1 offset (ft) <input id="win1-offset" type="number" value="8" min="0" step="0.5" /></label>
+          <label>Window 1 width (ft) <input id="win1-width" type="number" value="6" min="2" step="0.5" /></label>
+        </div>
+
+        <div class="form-grid">
+          <label>Window 2 offset (ft) <input id="win2-offset" type="number" value="24" min="0" step="0.5" /></label>
+          <label>Window 2 width (ft) <input id="win2-width" type="number" value="6" min="2" step="0.5" /></label>
+        </div>
+
+        <h3>Equipment Zone</h3>
+        <div class="form-grid">
+          <label>Zone label <input id="zone-label" value="Shop / Lab Area" /></label>
+          <label>Zone X (ft) <input id="zone-x" type="number" value="2" min="0" step="0.5" /></label>
+          <label>Zone Y (ft) <input id="zone-y" type="number" value="2" min="0" step="0.5" /></label>
+          <label>Zone width (ft) <input id="zone-width" type="number" value="36" min="4" step="0.5" /></label>
+          <label>Zone depth (ft) <input id="zone-depth" type="number" value="22" min="4" step="0.5" /></label>
+        </div>
+
+        <button id="load-sample-floor" class="btn secondary">Load sample floor plan</button>
+      </div>
+
+      <div id="tab-json" class="tab-panel">
+        <label class="file-label">
+          Upload floor plan JSON
+          <input type="file" id="floor-json-file" accept=".json,application/json" />
+        </label>
+        <textarea id="floor-json" rows="12" placeholder="Paste floor plan JSON here..."></textarea>
+      </div>
+
+      <h2>2. Equipment List</h2>
+      <p class="hint">Upload a CSV spreadsheet with equipment dimensions, clearances, and adjacency preferences.</p>
+      <label class="file-label">
+        Upload equipment CSV
+        <input type="file" id="equipment-file" accept=".csv,text/csv" />
+      </label>
+      <div class="link-row">
+        <a href="/templates/sample-equipment.csv" download>Download sample CSV</a>
+        <a href="/templates/sample-floor-plan.json" download>Download sample floor plan JSON</a>
+      </div>
+      <div id="equipment-preview" class="equipment-preview"></div>
+
+      <button id="generate-btn" class="btn primary full">Generate Test Layout</button>
+    </section>
+
+    <section class="panel outputs">
+      <h2>3. Layout Result</h2>
+      <div id="status" class="status idle">Upload a floor plan and equipment list, then click Generate.</div>
+      <div id="summary" class="summary"></div>
+      <div id="issues" class="issues"></div>
+
+      <div class="preview-row">
+        <canvas id="preview-canvas"></canvas>
+        <div class="preview-actions">
+          <button id="download-png" class="btn secondary" disabled>Download PNG</button>
+          <button id="download-server-png" class="btn secondary" disabled>Download PNG (server)</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
