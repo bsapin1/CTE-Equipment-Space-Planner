@@ -300,7 +300,9 @@ def _draw_door(
     draw.text((wx1, wy1 - 12), "D", fill="#8B4513", font=font)
 
     if door_type == "swing":
-        arc_px = int(door.effective_swing_clearance * scale)
+        sc = getattr(door, "swing_clearance_ft", 0.0)
+        eff = sc if sc > 0 else door.width_ft
+        arc_px = int(eff * scale)
         if arc_px < 2:
             return
         # Swing arc zone — light hatch using dashed rect
@@ -509,7 +511,8 @@ def render_layout_on_drawing(
     for door in fp.doors:
         door_type = getattr(door, "door_type", "swing")
         if door_type == "swing":
-            arc_ft = door.effective_swing_clearance
+            sc = getattr(door, "swing_clearance_ft", 0.0)
+            arc_ft = sc if sc > 0 else door.width_ft
             dx, dy, dw, dh = ft_to_px(*_door_zone_ft(door, fp.width_ft, fp.depth_ft, arc_ft))
             _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(139, 69, 19, 130), width=max(1, line_w), dash=6, gap=4)
         elif door_type == "overhead":

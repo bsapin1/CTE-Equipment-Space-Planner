@@ -85,7 +85,9 @@ def _wall_distance(
 
 def _swing_door_zone(door: Opening, room_w: float, room_d: float) -> Rect:
     """Return the floor rectangle occupied by a swing door's arc (in room coordinates)."""
-    arc = door.effective_swing_clearance
+    # effective_swing_clearance only exists on the new Opening model; fall back to width_ft
+    sc = getattr(door, "swing_clearance_ft", 0.0)
+    arc = sc if sc > 0 else door.width_ft
     off = door.offset_ft
     wid = door.width_ft
     if door.wall == "south":
@@ -130,15 +132,16 @@ def validate_layout(
     rd = floor_plan.depth_ft
 
     # Pre-compute door constraint zones
+    # Use getattr for backward compat with floor plans that lack door_type/swing_clearance_ft
     swing_zones: list[Rect] = [
         _swing_door_zone(d, rw, rd)
         for d in floor_plan.doors
-        if d.door_type == "swing"
+        if getattr(d, "door_type", "swing") == "swing"
     ]
     overhead_zones: list[Rect] = [
         _overhead_door_zone(d, rw, rd)
         for d in floor_plan.doors
-        if d.door_type == "overhead"
+        if getattr(d, "door_type", "swing") == "overhead"
     ]
     column_rects: list[Rect] = [_column_rect(c) for c in getattr(floor_plan, "columns", [])]
 
