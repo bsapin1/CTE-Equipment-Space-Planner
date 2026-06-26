@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 SCALE = 14          # pixels per foot (blank renderer)
 MARGIN = 60
-LEGEND_WIDTH = 460
+LEGEND_WIDTH = 600
 
 # All linework is black and white
 BLACK = (0, 0, 0)
@@ -191,22 +191,22 @@ def _draw_legend_panel(
     fp_name: str = "",
     fp_dims: str = "",
 ) -> None:
-    font_title = _load_font_bold(24)
-    font = _load_font(20)
-    font_sm = _load_font(19)
-    font_num = _load_font_bold(19)
+    font_title = _load_font_bold(36)
+    font = _load_font(30)
+    font_sm = _load_font(28)
+    font_num = _load_font_bold(28)
 
     if fp_name:
         draw.text((lx, ly), fp_name, fill=BLACK, font=font_title)
-        ly += 30
+        ly += 44
     if fp_dims:
         draw.text((lx, ly), fp_dims, fill=GRAY, font=font_sm)
-        ly += 26
+        ly += 36
 
     draw.text((lx, ly), "KEY", fill=BLACK, font=font_title)
-    ly += 34
+    ly += 50
 
-    box = 30
+    box = 44
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         if not item:
@@ -215,16 +215,16 @@ def _draw_legend_panel(
         w, d = _rotated_dims(item, p.rotation)
 
         # Mini B&W equipment symbol
-        draw.rectangle([lx, ly, lx + box, ly + box], fill=WHITE, outline=BLACK, width=2)
+        draw.rectangle([lx, ly, lx + box, ly + box], fill=WHITE, outline=BLACK, width=3)
         _centered_text(draw, lx + box / 2, ly + box / 2, num, font_num, fill=BLACK)
 
         label = f"{num}. {item.name}  ({w:.0f}' × {d:.0f}')"
-        draw.text((lx + box + 10, ly + (box - 18) // 2), label, fill=BLACK, font=font_sm)
-        ly += box + 10
+        draw.text((lx + box + 14, ly + (box - 26) // 2), label, fill=BLACK, font=font_sm)
+        ly += box + 14
 
-    ly += 10
-    draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill=GRAY, width=1)
-    ly += 10
+    ly += 14
+    draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill=GRAY, width=2)
+    ly += 14
 
     if fits:
         draw.text((lx, ly), f"Layout fits  |  Zone util: {utilization:.0f}%", fill=BLACK, font=font)
@@ -380,7 +380,7 @@ def render_layout_png(req: ExportRequest) -> bytes:
         _draw_opening(draw, ox, oy, room_w, room_h, win.wall, win.offset_ft, win.width_ft, "#3B82F6", "W")
 
     number_map = _make_number_map(req.layout.placements)
-    font_num = _load_font_bold(max(11, int(SCALE * 1.4)))
+    font_num = _load_font_bold(max(14, int(SCALE * 2.2)))
 
     # Room pixel bounds for clamping
     room_px_x0, room_px_y0 = ox, oy
@@ -474,7 +474,7 @@ def render_layout_on_drawing(
     # Scale-aware line width and font
     pix_per_ft = (scale_x + scale_y) / 2
     line_w = max(2, int(pix_per_ft * 0.12))
-    font_num = _load_font_bold(max(11, int(pix_per_ft * 0.75)))
+    font_num = _load_font_bold(max(14, int(pix_per_ft * 1.2)))
 
     # Room pixel region bounds (for clamping clearances)
     room_px_x0 = int(rpx_left)
