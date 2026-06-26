@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 SCALE = 14          # pixels per foot (blank renderer)
 MARGIN = 60
-LEGEND_WIDTH = 280
+LEGEND_WIDTH = 380
 
 # All linework is black and white
 BLACK = (0, 0, 0)
@@ -191,22 +191,22 @@ def _draw_legend_panel(
     fp_name: str = "",
     fp_dims: str = "",
 ) -> None:
-    font_title = _load_font_bold(12)
-    font = _load_font(11)
-    font_sm = _load_font(10)
-    font_num = _load_font_bold(11)
+    font_title = _load_font_bold(18)
+    font = _load_font(16)
+    font_sm = _load_font(15)
+    font_num = _load_font_bold(15)
 
     if fp_name:
         draw.text((lx, ly), fp_name, fill=BLACK, font=font_title)
-        ly += 18
+        ly += 24
     if fp_dims:
         draw.text((lx, ly), fp_dims, fill=GRAY, font=font_sm)
-        ly += 16
+        ly += 22
 
     draw.text((lx, ly), "KEY", fill=BLACK, font=font_title)
-    ly += 20
+    ly += 28
 
-    box = 16
+    box = 24
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         if not item:
@@ -219,12 +219,12 @@ def _draw_legend_panel(
         _centered_text(draw, lx + box / 2, ly + box / 2, num, font_num, fill=BLACK)
 
         label = f"{num}. {item.name}  ({w:.0f}' × {d:.0f}')"
-        draw.text((lx + box + 6, ly + (box - 10) // 2), label, fill=BLACK, font=font_sm)
-        ly += box + 5
+        draw.text((lx + box + 8, ly + (box - 14) // 2), label, fill=BLACK, font=font_sm)
+        ly += box + 8
 
-    ly += 8
+    ly += 10
     draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill=GRAY, width=1)
-    ly += 8
+    ly += 10
 
     if fits:
         draw.text((lx, ly), f"Layout fits  |  Zone util: {utilization:.0f}%", fill=BLACK, font=font)
