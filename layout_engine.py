@@ -167,6 +167,35 @@ def _fallback_layout(
     return placements, "Fallback grid layout (Gemini unavailable or failed)."
 
 
+_VALID_ROTATIONS = {0, 90, 180, 270}
+_VALID_WALL_SIDES = {"none", "north", "south", "east", "west"}
+
+
+def _safe_placement(raw: dict) -> Placement:
+    """Coerce a raw Gemini placement dict into a valid Placement, fixing common bad values."""
+    rotation = raw.get("rotation", 0)
+    try:
+        rotation = int(float(rotation))
+    except (TypeError, ValueError):
+        rotation = 0
+    # Round to nearest 90, clamp to allowed set
+    rotation = min(_VALID_ROTATIONS, key=lambda r: abs(r - (rotation % 360)))
+
+    wall_side = str(raw.get("wall_side", "none")).lower().strip()
+    if wall_side not in _VALID_WALL_SIDES:
+        wall_side = "none"
+
+    return Placement(
+        instance_id=str(raw.get("instance_id", "unknown")),
+        equipment_id=str(raw.get("equipment_id", "")),
+        zone_id=str(raw.get("zone_id", "")),
+        x_ft=float(raw.get("x_ft", 0.0)),
+        y_ft=float(raw.get("y_ft", 0.0)),
+        rotation=rotation,      # type: ignore[arg-type]
+        wall_side=wall_side,    # type: ignore[arg-type]
+    )
+
+
 def generate_layout(
     floor_plan: FloorPlan,
     equipment: list[EquipmentItem],
@@ -185,7 +214,7 @@ def generate_layout(
             )
             summary = raw.get("summary", "")
             for p in raw.get("placements", []):
-                placements.append(Placement(**p))
+                placements.append(_safe_placement(p))
         except Exception as exc:
             gemini_error = str(exc)
 

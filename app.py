@@ -103,6 +103,38 @@ def render_bounds_preview(image_bytes: bytes, bounds: dict) -> bytes | None:
         return None
 
 
+def _sanitize_equipment(items: list) -> list:
+    """Coerce a list of EquipmentItem objects or dicts into valid EquipmentItem objects."""
+    safe = []
+    for raw in items:
+        try:
+            d = raw if isinstance(raw, dict) else raw.model_dump()
+            wall = str(d.get("wall_preferred", "any")).lower().strip()
+            if wall not in ("yes", "no", "any"):
+                wall = "any"
+            adj = d.get("adjacency", [])
+            if isinstance(adj, str):
+                adj = [s.strip() for s in adj.replace("|", ";").split(";") if s.strip()]
+            safe.append(EquipmentItem(
+                id=str(d.get("id") or "EQ").strip() or "EQ",
+                name=str(d.get("name") or "Unknown").strip() or "Unknown",
+                width_ft=max(0.1, float(d.get("width_ft") or 1.0)),
+                depth_ft=max(0.1, float(d.get("depth_ft") or 1.0)),
+                qty=max(1, int(float(d.get("qty") or 1))),
+                clearance_front_ft=max(0.0, float(d.get("clearance_front_ft") or 3.0)),
+                clearance_rear_ft=max(0.0, float(d.get("clearance_rear_ft") or 1.0)),
+                clearance_left_ft=max(0.0, float(d.get("clearance_left_ft") or 1.5)),
+                clearance_right_ft=max(0.0, float(d.get("clearance_right_ft") or 1.5)),
+                wall_preferred=wall,  # type: ignore[arg-type]
+                adjacency=[str(a).strip() for a in adj if str(a).strip()],
+                category=str(d.get("category") or "general").strip() or "general",
+                notes=str(d.get("notes") or "").strip(),
+            ))
+        except Exception:
+            continue
+    return safe
+
+
 def load_sample_floor_plan() -> dict:
     return json.loads((TEMPLATES / "sample-floor-plan.json").read_text())
 
@@ -589,7 +621,7 @@ if st.button("Generate Test Layout", type="primary", use_container_width=True):
 
     st.session_state["layout_result"] = layout
     st.session_state["layout_floor_plan"] = floor_plan
-    st.session_state["layout_equipment"] = equipment
+    st.session_state["layout_equipment"] = _sanitize_equipment(equipment)
 
 if "layout_result" in st.session_state:
     layout = st.session_state["layout_result"]
@@ -613,7 +645,12 @@ if "layout_result" in st.session_state:
         with st.expander("Issues & warnings", expanded=not layout.fits):
             show_issues(layout.issues)
 
-    export_req = ExportRequest(floor_plan=fp, equipment=eq, layout=layout)
+    try:
+        eq_safe = _sanitize_equipment(eq)
+        export_req = ExportRequest(floor_plan=fp, equipment=eq_safe, layout=layout)
+    except Exception as exc:
+        st.error(f"Could not build export request: {exc}")
+        st.stop()
     bg_bytes = st.session_state.get("drawing_bg_bytes")
     bg_name = st.session_state.get("drawing_bg_name", "")
 
