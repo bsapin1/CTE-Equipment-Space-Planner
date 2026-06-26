@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 SCALE = 14          # pixels per foot (blank renderer)
 MARGIN = 60
-LEGEND_WIDTH = 380
+LEGEND_WIDTH = 460
 
 # All linework is black and white
 BLACK = (0, 0, 0)
@@ -191,22 +191,22 @@ def _draw_legend_panel(
     fp_name: str = "",
     fp_dims: str = "",
 ) -> None:
-    font_title = _load_font_bold(18)
-    font = _load_font(16)
-    font_sm = _load_font(15)
-    font_num = _load_font_bold(15)
+    font_title = _load_font_bold(24)
+    font = _load_font(20)
+    font_sm = _load_font(19)
+    font_num = _load_font_bold(19)
 
     if fp_name:
         draw.text((lx, ly), fp_name, fill=BLACK, font=font_title)
-        ly += 24
+        ly += 30
     if fp_dims:
         draw.text((lx, ly), fp_dims, fill=GRAY, font=font_sm)
-        ly += 22
+        ly += 26
 
     draw.text((lx, ly), "KEY", fill=BLACK, font=font_title)
-    ly += 28
+    ly += 34
 
-    box = 24
+    box = 30
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         if not item:
@@ -219,8 +219,8 @@ def _draw_legend_panel(
         _centered_text(draw, lx + box / 2, ly + box / 2, num, font_num, fill=BLACK)
 
         label = f"{num}. {item.name}  ({w:.0f}' × {d:.0f}')"
-        draw.text((lx + box + 8, ly + (box - 14) // 2), label, fill=BLACK, font=font_sm)
-        ly += box + 8
+        draw.text((lx + box + 10, ly + (box - 18) // 2), label, fill=BLACK, font=font_sm)
+        ly += box + 10
 
     ly += 10
     draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill=GRAY, width=1)
@@ -380,7 +380,7 @@ def render_layout_png(req: ExportRequest) -> bytes:
         _draw_opening(draw, ox, oy, room_w, room_h, win.wall, win.offset_ft, win.width_ft, "#3B82F6", "W")
 
     number_map = _make_number_map(req.layout.placements)
-    font_num = _load_font_bold(max(9, int(SCALE * 0.9)))
+    font_num = _load_font_bold(max(11, int(SCALE * 1.4)))
 
     # Room pixel bounds for clamping
     room_px_x0, room_px_y0 = ox, oy
@@ -474,7 +474,7 @@ def render_layout_on_drawing(
     # Scale-aware line width and font
     pix_per_ft = (scale_x + scale_y) / 2
     line_w = max(2, int(pix_per_ft * 0.12))
-    font_num = _load_font_bold(max(9, int(pix_per_ft * 0.55)))
+    font_num = _load_font_bold(max(11, int(pix_per_ft * 0.75)))
 
     # Room pixel region bounds (for clamping clearances)
     room_px_x0 = int(rpx_left)
