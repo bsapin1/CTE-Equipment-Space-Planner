@@ -48,6 +48,61 @@ st.caption(
 )
 
 
+def render_bounds_preview(image_bytes: bytes, bounds: dict) -> bytes | None:
+    """Draw the room bounds rectangle on the image and return PNG bytes."""
+    try:
+        from PIL import Image as _Image, ImageDraw as _Draw, ImageFont as _Font
+
+        img = _Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        w, h = img.size
+
+        # Keep preview width reasonable — scale down if very large
+        max_w = 900
+        if w > max_w:
+            scale = max_w / w
+            img = img.resize((int(w * scale), int(h * scale)), _Image.LANCZOS)
+            w, h = img.size
+
+        overlay = _Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = _Draw.Draw(overlay)
+
+        x0 = int(bounds["left"] * w)
+        y0 = int(bounds["top"] * h)
+        x1 = int(bounds["right"] * w)
+        y1 = int(bounds["bottom"] * h)
+
+        # Semi-transparent fill inside room bounds
+        draw.rectangle([x0, y0, x1, y1], fill=(37, 99, 235, 35))
+        # Bright border
+        draw.rectangle([x0, y0, x1, y1], outline=(37, 99, 235, 230), width=3)
+
+        # Corner tick marks
+        tick = max(8, int(min(w, h) * 0.025))
+        for cx, cy in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]:
+            dx = tick if cx == x0 else -tick
+            dy = tick if cy == y0 else -tick
+            draw.line([(cx, cy), (cx + dx, cy)], fill=(37, 99, 235, 255), width=3)
+            draw.line([(cx, cy), (cx, cy + dy)], fill=(37, 99, 235, 255), width=3)
+
+        # Label
+        label = "Room boundary"
+        try:
+            font = _Font.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 14)
+        except OSError:
+            font = _Font.load_default()
+        text_x = x0 + 6
+        text_y = y0 + 6
+        draw.text((text_x + 1, text_y + 1), label, fill=(0, 0, 0, 180), font=font)
+        draw.text((text_x, text_y), label, fill=(37, 99, 235, 255), font=font)
+
+        preview = _Image.alpha_composite(img, overlay).convert("RGB")
+        buf = io.BytesIO()
+        preview.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def load_sample_floor_plan() -> dict:
     return json.loads((TEMPLATES / "sample-floor-plan.json").read_text())
 
@@ -326,12 +381,24 @@ with col_fp:
                 b_top = bc1.slider("Top edge (%)", 0, 50, int(bounds["top"] * 100), 1, key="b_top")
                 b_bottom = bc2.slider("Bottom edge (%)", 50, 100, int(bounds["bottom"] * 100), 1, key="b_bottom")
                 # Persist adjusted bounds
-                st.session_state["room_bounds_pct"] = {
+                adjusted_bounds = {
                     "left": b_left / 100,
                     "top": b_top / 100,
                     "right": b_right / 100,
                     "bottom": b_bottom / 100,
                 }
+                st.session_state["room_bounds_pct"] = adjusted_bounds
+
+                # Live preview
+                preview_bytes = render_bounds_preview(
+                    st.session_state["drawing_bg_bytes"], adjusted_bounds
+                )
+                if preview_bytes:
+                    st.image(
+                        preview_bytes,
+                        caption="Room boundary preview — adjust sliders until the blue box aligns with the room walls",
+                        use_container_width=True,
+                    )
 
             with st.expander("Extracted floor plan JSON (review or edit)"):
                 edited = st.text_area(
