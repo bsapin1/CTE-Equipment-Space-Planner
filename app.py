@@ -457,6 +457,23 @@ with col_eq:
 
 st.divider()
 
+layout_instructions = st.text_area(
+    "Additional layout instructions (optional)",
+    height=100,
+    placeholder=(
+        "Example: Place all welding equipment along the north wall. "
+        "Keep a 6 ft aisle down the center. "
+        "Group cutting and grinding equipment together near the exhaust fan. "
+        "Workbenches should face the windows."
+    ),
+    help=(
+        "Any extra direction for Gemini when generating the test layout — "
+        "priority groupings, aisle widths, specific wall preferences, "
+        "equipment to exclude, safety zones, etc."
+    ),
+    key="layout_instructions",
+)
+
 if st.button("Generate Test Layout", type="primary", use_container_width=True):
     if floor_plan is None and "drawing_floor_plan" in st.session_state:
         floor_plan = st.session_state["drawing_floor_plan"]
@@ -471,7 +488,7 @@ if st.button("Generate Test Layout", type="primary", use_container_width=True):
         st.stop()
 
     with st.spinner("Generating layout with Gemini…"):
-        layout = generate_layout(floor_plan, equipment, api_key or "")
+        layout = generate_layout(floor_plan, equipment, api_key or "", layout_instructions)
 
     st.session_state["layout_result"] = layout
     st.session_state["layout_floor_plan"] = floor_plan
