@@ -32,9 +32,21 @@ except ImportError:
 GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
 
 
-def _build_prompt(floor_plan: FloorPlan, equipment: list[EquipmentItem]) -> str:
+def _build_prompt(
+    floor_plan: FloorPlan,
+    equipment: list[EquipmentItem],
+    user_instructions: str = "",
+) -> str:
     fp = floor_plan.model_dump()
     eq = [e.model_dump() for e in equipment]
+
+    instructions_block = ""
+    if user_instructions.strip():
+        instructions_block = f"""
+ADDITIONAL INSTRUCTIONS FROM THE USER (follow these carefully — they take priority over the default rules where they conflict):
+{user_instructions.strip()}
+"""
+
     return f"""You are a CTE (Career & Technical Education) classroom equipment planner.
 
 Design ONE test-fit layout placing all equipment instances inside the designated equipment zones.
@@ -44,7 +56,7 @@ FLOOR PLAN (feet, origin at southwest corner of room):
 
 EQUIPMENT LIST:
 {json.dumps(eq, indent=2)}
-
+{instructions_block}
 RULES:
 1. Every equipment instance must fit fully inside an equipment zone (x,y are relative to zone southwest corner).
 2. Respect clearances: front, rear, left, right — clearance zones must not overlap between different items.
@@ -159,6 +171,7 @@ def generate_layout(
     floor_plan: FloorPlan,
     equipment: list[EquipmentItem],
     api_key: str,
+    user_instructions: str = "",
 ) -> LayoutResult:
     summary = ""
     placements: list[Placement] = []
@@ -166,7 +179,10 @@ def generate_layout(
 
     if api_key.strip():
         try:
-            raw = _call_gemini(api_key.strip(), _build_prompt(floor_plan, equipment))
+            raw = _call_gemini(
+                api_key.strip(),
+                _build_prompt(floor_plan, equipment, user_instructions),
+            )
             summary = raw.get("summary", "")
             for p in raw.get("placements", []):
                 placements.append(Placement(**p))
