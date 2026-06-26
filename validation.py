@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 try:
-    from .models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Placement
+    from .models import Column, EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
 except ImportError:
-    from models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Placement
+    from models import Column, EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
 
 
 @dataclass
@@ -64,12 +64,14 @@ def _zone_rect(zone: EquipmentZone) -> Rect:
     return Rect(zone.x_ft, zone.y_ft, zone.width_ft, zone.depth_ft)
 
 
+def _column_rect(col: Column) -> Rect:
+    return Rect(col.x_ft, col.y_ft, col.width_ft, col.depth_ft)
+
+
 def _wall_distance(
     eq_rect: Rect, wall: str, floor_plan: FloorPlan, zone: EquipmentZone
 ) -> float:
-    room_w, room_d = floor_plan.width_ft, floor_plan.depth_ft
     zone_rect = _zone_rect(zone)
-
     if wall == "north":
         return abs(eq_rect.y + eq_rect.h - (zone_rect.y + zone_rect.h))
     if wall == "south":
@@ -81,6 +83,40 @@ def _wall_distance(
     return float("inf")
 
 
+def _swing_door_zone(door: Opening, room_w: float, room_d: float) -> Rect:
+    """Return the floor rectangle occupied by a swing door's arc (in room coordinates)."""
+    arc = door.effective_swing_clearance
+    off = door.offset_ft
+    wid = door.width_ft
+    if door.wall == "south":
+        return Rect(x=off, y=0.0, w=wid, h=arc)
+    if door.wall == "north":
+        return Rect(x=off, y=room_d - arc, w=wid, h=arc)
+    if door.wall == "west":
+        return Rect(x=0.0, y=room_d - off - wid, w=arc, h=wid)
+    # east
+    return Rect(x=room_w - arc, y=room_d - off - wid, w=arc, h=wid)
+
+
+def _overhead_door_zone(door: Opening, room_w: float, room_d: float) -> Rect:
+    """Return the floor rectangle an overhead door travels across when opening.
+
+    Typical overhead doors travel a depth equal to the door width (the door panel
+    stacks overhead over that footprint).  We use width_ft as the travel depth.
+    """
+    travel = door.width_ft  # conservative: door panel depth = door width
+    off = door.offset_ft
+    wid = door.width_ft
+    if door.wall == "south":
+        return Rect(x=off, y=0.0, w=wid, h=travel)
+    if door.wall == "north":
+        return Rect(x=off, y=room_d - travel, w=wid, h=travel)
+    if door.wall == "west":
+        return Rect(x=0.0, y=room_d - off - wid, w=travel, h=wid)
+    # east
+    return Rect(x=room_w - travel, y=room_d - off - wid, w=travel, h=wid)
+
+
 def validate_layout(
     floor_plan: FloorPlan,
     equipment: list[EquipmentItem],
@@ -90,126 +126,151 @@ def validate_layout(
     eq_by_id = {e.id: e for e in equipment}
     zone_by_id = {z.id: z for z in floor_plan.equipment_zones}
 
+    rw = floor_plan.width_ft
+    rd = floor_plan.depth_ft
+
+    # Pre-compute door constraint zones
+    swing_zones: list[Rect] = [
+        _swing_door_zone(d, rw, rd)
+        for d in floor_plan.doors
+        if d.door_type == "swing"
+    ]
+    overhead_zones: list[Rect] = [
+        _overhead_door_zone(d, rw, rd)
+        for d in floor_plan.doors
+        if d.door_type == "overhead"
+    ]
+    column_rects: list[Rect] = [_column_rect(c) for c in getattr(floor_plan, "columns", [])]
+
     clearance_rects: list[tuple[str, Rect]] = []
 
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         zone = zone_by_id.get(p.zone_id)
         if not item:
-            issues.append(
-                LayoutIssue(
-                    severity="error",
-                    message=f"Unknown equipment id '{p.equipment_id}'",
-                    equipment_id=p.equipment_id,
-                )
-            )
+            issues.append(LayoutIssue(
+                severity="error",
+                message=f"Unknown equipment id '{p.equipment_id}'",
+                equipment_id=p.equipment_id,
+            ))
             continue
         if not zone:
-            issues.append(
-                LayoutIssue(
-                    severity="error",
-                    message=f"Unknown zone id '{p.zone_id}'",
-                    equipment_id=p.equipment_id,
-                )
-            )
+            issues.append(LayoutIssue(
+                severity="error",
+                message=f"Unknown zone id '{p.zone_id}'",
+                equipment_id=p.equipment_id,
+            ))
             continue
 
         eq_rect = _equipment_rect(p, item, zone)
         clr_rect = _clearance_rect(p, item, zone)
         zone_rect = _zone_rect(zone)
 
+        # Equipment must be inside its zone
         if (
             eq_rect.x < zone_rect.x - 0.01
             or eq_rect.y < zone_rect.y - 0.01
             or eq_rect.x + eq_rect.w > zone_rect.x + zone_rect.w + 0.01
             or eq_rect.y + eq_rect.h > zone_rect.y + zone_rect.h + 0.01
         ):
-            issues.append(
-                LayoutIssue(
-                    severity="error",
-                    message=f"{p.instance_id} extends outside zone '{zone.label or zone.id}'",
-                    equipment_id=p.equipment_id,
-                )
-            )
+            issues.append(LayoutIssue(
+                severity="error",
+                message=f"{p.instance_id} extends outside zone '{zone.label or zone.id}'",
+                equipment_id=p.equipment_id,
+            ))
 
+        # Wall preference
         if item.wall_preferred == "yes" and p.wall_side == "none":
-            issues.append(
-                LayoutIssue(
-                    severity="warning",
-                    message=f"{item.name} prefers wall placement but is freestanding",
-                    equipment_id=p.equipment_id,
-                )
-            )
-
+            issues.append(LayoutIssue(
+                severity="warning",
+                message=f"{item.name} prefers wall placement but is freestanding",
+                equipment_id=p.equipment_id,
+            ))
         if p.wall_side != "none":
             dist = _wall_distance(eq_rect, p.wall_side, floor_plan, zone)
             if dist > 0.5:
-                issues.append(
-                    LayoutIssue(
-                        severity="warning",
-                        message=f"{item.name} marked on {p.wall_side} wall but is {dist:.1f} ft away",
-                        equipment_id=p.equipment_id,
-                    )
-                )
+                issues.append(LayoutIssue(
+                    severity="warning",
+                    message=f"{item.name} marked on {p.wall_side} wall but is {dist:.1f} ft away",
+                    equipment_id=p.equipment_id,
+                ))
+
+        # Swing door arcs — equipment footprint must not enter
+        for sz in swing_zones:
+            if eq_rect.intersects(sz):
+                issues.append(LayoutIssue(
+                    severity="error",
+                    message=f"{p.instance_id} is placed inside a swing door arc",
+                    equipment_id=p.equipment_id,
+                ))
+                break
+
+        # Overhead door travel path — equipment AND clearance must not enter
+        for oz in overhead_zones:
+            if clr_rect.intersects(oz):
+                issues.append(LayoutIssue(
+                    severity="error",
+                    message=f"{p.instance_id} clearance encroaches on an overhead door travel path",
+                    equipment_id=p.equipment_id,
+                ))
+                break
+
+        # Columns — clearance rect must not overlap any column
+        for col_rect in column_rects:
+            if clr_rect.intersects(col_rect):
+                issues.append(LayoutIssue(
+                    severity="error",
+                    message=f"{p.instance_id} clearance overlaps a structural column",
+                    equipment_id=p.equipment_id,
+                ))
+                break
 
         clearance_rects.append((p.instance_id, clr_rect))
 
+    # Clearance-to-clearance overlaps
     for i, (id_a, rect_a) in enumerate(clearance_rects):
-        for id_b, rect_b in clearance_rects[i + 1 :]:
+        for id_b, rect_b in clearance_rects[i + 1:]:
             if rect_a.intersects(rect_b):
-                issues.append(
-                    LayoutIssue(
-                        severity="error",
-                        message=f"Clearance overlap between {id_a} and {id_b}",
-                    )
-                )
-
-    placed_ids = {p.equipment_id for p in placements}
-    for item in equipment:
-        expected = item.qty
-        actual = sum(1 for p in placements if p.equipment_id == item.id)
-        if actual < expected:
-            issues.append(
-                LayoutIssue(
+                issues.append(LayoutIssue(
                     severity="error",
-                    message=f"Only placed {actual}/{expected} of {item.name}",
-                    equipment_id=item.id,
-                )
-            )
+                    message=f"Clearance overlap between {id_a} and {id_b}",
+                ))
 
+    # Quantity check
+    for item in equipment:
+        actual = sum(1 for p in placements if p.equipment_id == item.id)
+        if actual < item.qty:
+            issues.append(LayoutIssue(
+                severity="error",
+                message=f"Only placed {actual}/{item.qty} of {item.name}",
+                equipment_id=item.id,
+            ))
+
+    # Adjacency
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         if not item or not item.adjacency:
             continue
         my_rect = _equipment_rect(p, item, zone_by_id[p.zone_id])
         for adj_id in item.adjacency:
-            neighbors = [
-                other
-                for other in placements
-                if other.equipment_id == adj_id and other.zone_id == p.zone_id
-            ]
+            neighbors = [o for o in placements if o.equipment_id == adj_id and o.zone_id == p.zone_id]
             if not neighbors:
-                issues.append(
-                    LayoutIssue(
-                        severity="warning",
-                        message=f"{item.name} should be adjacent to {adj_id} but none placed nearby",
-                        equipment_id=p.equipment_id,
-                    )
-                )
+                issues.append(LayoutIssue(
+                    severity="warning",
+                    message=f"{item.name} should be adjacent to {adj_id} but none placed nearby",
+                    equipment_id=p.equipment_id,
+                ))
                 continue
             min_dist = min(
                 _rect_gap(my_rect, _equipment_rect(n, eq_by_id[n.equipment_id], zone_by_id[n.zone_id]))
-                for n in neighbors
-                if n.equipment_id in eq_by_id
+                for n in neighbors if n.equipment_id in eq_by_id
             )
             if min_dist > 8.0:
-                issues.append(
-                    LayoutIssue(
-                        severity="warning",
-                        message=f"{item.name} is {min_dist:.1f} ft from preferred neighbor {adj_id}",
-                        equipment_id=p.equipment_id,
-                    )
-                )
+                issues.append(LayoutIssue(
+                    severity="warning",
+                    message=f"{item.name} is {min_dist:.1f} ft from preferred neighbor {adj_id}",
+                    equipment_id=p.equipment_id,
+                ))
 
     return issues
 
@@ -244,15 +305,14 @@ def compute_fit_metrics(
         clr = _clearance_rect(p, item, zone)
         used_area += clr.w * clr.h
 
-    required_area = 0.0
-    for item in equipment:
-        footprint = (
-            item.width_ft + item.clearance_left_ft + item.clearance_right_ft
-        ) * (item.depth_ft + item.clearance_front_ft + item.clearance_rear_ft)
-        required_area += footprint * item.qty
+    required_area = sum(
+        (e.width_ft + e.clearance_left_ft + e.clearance_right_ft)
+        * (e.depth_ft + e.clearance_front_ft + e.clearance_rear_ft)
+        * e.qty
+        for e in equipment
+    )
 
     utilization = min(100.0, (used_area / total_zone_area) * 100)
     shortfall = max(0.0, required_area - total_zone_area)
     fits = shortfall <= 0.0
-
     return fits, round(shortfall, 1), round(utilization, 1)

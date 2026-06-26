@@ -11,6 +11,27 @@ class Opening(BaseModel):
     wall: Literal["north", "south", "east", "west"]
     offset_ft: float = Field(ge=0, description="Distance from west/north corner along the wall")
     width_ft: float = Field(gt=0)
+    # "swing"    — hinged door with arc swinging into the room
+    # "overhead" — garage/roll-up/coiling door (dashed line on plan = travel path below door)
+    # "sliding"  — pocket or barn door (no arc, but track clearance needed)
+    # "passage"  — opening with no door (no clearance needed beyond circulation)
+    door_type: Literal["swing", "overhead", "sliding", "passage", "window"] = "swing"
+    # How far the swing arc extends into the room (ft). 0 = auto-compute as width_ft.
+    swing_clearance_ft: float = Field(default=0.0, ge=0)
+
+    @property
+    def effective_swing_clearance(self) -> float:
+        """Swing arc depth into the room (0 → defaults to door width = 90° swing)."""
+        return self.swing_clearance_ft if self.swing_clearance_ft > 0 else self.width_ft
+
+
+class Column(BaseModel):
+    """Structural column or pier — equipment clearances must not overlap these."""
+    id: str = ""
+    x_ft: float = Field(ge=0, description="SW corner X (feet)")
+    y_ft: float = Field(ge=0, description="SW corner Y (feet)")
+    width_ft: float = Field(default=1.5, gt=0)
+    depth_ft: float = Field(default=1.5, gt=0)
 
 
 class EquipmentZone(BaseModel):
@@ -28,6 +49,7 @@ class FloorPlan(BaseModel):
     depth_ft: float = Field(gt=0)
     doors: list[Opening] = Field(default_factory=list)
     windows: list[Opening] = Field(default_factory=list)
+    columns: list[Column] = Field(default_factory=list)
     equipment_zones: list[EquipmentZone] = Field(default_factory=list)
 
 

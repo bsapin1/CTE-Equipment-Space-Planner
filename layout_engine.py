@@ -67,6 +67,10 @@ RULES:
 7. rotation is degrees: 0, 90, 180, or 270 (clockwise from default orientation).
 8. wall_side indicates which zone wall the equipment back is against: north/south/east/west or "none".
 9. Create unique instance_id for each placed unit (e.g. "WLD-1", "WLD-2" for qty>1).
+10. SWING DOORS: The equipment footprint must NOT be placed inside a swing door arc. The arc extends swing_clearance_ft (or door width_ft if swing_clearance_ft is 0) into the room from the door's wall. Keep this entire zone completely clear.
+11. OVERHEAD DOORS: Equipment footprint AND clearance zones must not encroach on overhead door travel paths. The travel path extends door width_ft into the room along the full width of the door.
+12. COLUMNS/WALLS: No equipment clearance zone may overlap any structural column or interior wall. Columns are listed in floor_plan.columns — treat each as an impassable solid rectangle that clearances must respect.
+13. SCALE: Use the exact room and zone dimensions given in feet. Equipment dimensions are in feet. Place equipment at realistic positions that respect the stated room size — do not compress or scale dimensions.
 
 Respond with ONLY valid JSON (no markdown fences):
 {{

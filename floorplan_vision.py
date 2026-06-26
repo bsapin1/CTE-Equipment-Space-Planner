@@ -53,15 +53,34 @@ USER INSTRUCTIONS (follow these carefully when interpreting the drawing):
 Analyze the uploaded floor plan drawing and extract a structured layout for equipment placement.
 
 {instructions_block}
-RULES:
-1. Estimate dimensions in FEET. If the drawing shows a scale or dimension strings, use them. If not, estimate from typical door width (~3 ft) or note assumptions in analysis_notes.
-2. Use a coordinate system with origin at the SOUTHWEST corner of the room: +X east, +Y north.
-3. Identify doors and windows on room walls: north, south, east, west.
-4. offset_ft on a wall is measured from the west corner (north/south walls) or south corner (east/west walls) along that wall.
-5. equipment_zones are areas where CTE equipment may be placed — open floor areas, shop zones, lab areas. Exclude restrooms, closets, corridors unless the user instructions say otherwise.
-6. If multiple equipment areas exist, create a zone for each with a descriptive label.
-7. If room size cannot be determined, use reasonable CTE classroom defaults (~40 x 30 ft) and explain in analysis_notes.
-8. room_bounds_pct: Estimate where the room's outer walls sit within the image as fractions of total image width/height (0.0 = left/top edge, 1.0 = right/bottom edge). Many drawings have title blocks, borders, north arrows, or margins — account for those. If the room fills the entire image, use 0.0/0.0/1.0/1.0.
+EXTRACTION RULES:
+
+DIMENSIONS & SCALE:
+1. Look for a scale bar, scale notation (e.g. "1/4\" = 1'-0\""), or labeled dimensions on the drawing.
+   Use these to compute accurate room sizes in FEET. Do not estimate if a scale or dimension is visible.
+2. If dimension strings label specific rooms (e.g. "100' x 80'"), use those exact values.
+3. Use a coordinate system with origin at the SOUTHWEST corner of the room: +X east, +Y north.
+
+DOORS:
+4. Classify every door by type:
+   - "swing"    = hinged door with a visible arc drawn on plan. swing_clearance_ft = arc radius (usually = door width).
+   - "overhead" = garage/roll-up/coiling door. Often shown with a dashed rectangle on the floor indicating the travel path. swing_clearance_ft = 0.
+   - "sliding"  = no arc, track indicated. swing_clearance_ft = 0.
+   - "passage"  = open cased opening, no door. swing_clearance_ft = 0.
+5. offset_ft on a wall is measured from the west corner (north/south walls) or south corner (east/west walls).
+
+COLUMNS & STRUCTURAL ELEMENTS:
+6. Identify ALL structural columns, piers, or pilasters visible as solid filled squares/rectangles inside or on the perimeter of the room. These are typically small (1-3 ft square). Record each one's SW corner position and size.
+
+WINDOWS:
+7. Identify windows on room walls (door_type = "window" in the doors list is NOT needed — windows go in the windows array with wall/offset_ft/width_ft).
+
+ZONES:
+8. equipment_zones are open areas where CTE equipment may be placed — workshops, labs, shop floors. Exclude offices, restrooms, storage closets, corridors.
+9. If multiple equipment areas exist, create a zone for each with a descriptive label and accurate dimensions.
+
+ROOM BOUNDS:
+10. room_bounds_pct: Estimate where the OUTER WALLS of the primary room sit within the image as fractions (0=left/top edge, 1=right/bottom edge). Account for title blocks, borders, north arrows, scale bars, and margins. If the room fills the entire image, use 0/0/1/1.
 
 Respond with ONLY valid JSON (no markdown):
 {{
@@ -69,12 +88,23 @@ Respond with ONLY valid JSON (no markdown):
     "name": "string",
     "width_ft": 0.0,
     "depth_ft": 0.0,
-    "doors": [{{ "wall": "south", "offset_ft": 0.0, "width_ft": 3.0 }}],
-    "windows": [{{ "wall": "north", "offset_ft": 0.0, "width_ft": 6.0 }}],
+    "doors": [
+      {{
+        "wall": "south",
+        "offset_ft": 0.0,
+        "width_ft": 3.0,
+        "door_type": "swing",
+        "swing_clearance_ft": 3.0
+      }}
+    ],
+    "windows": [{{ "wall": "north", "offset_ft": 0.0, "width_ft": 6.0, "door_type": "window", "swing_clearance_ft": 0 }}],
+    "columns": [
+      {{ "id": "col-1", "x_ft": 0.0, "y_ft": 0.0, "width_ft": 1.5, "depth_ft": 1.5 }}
+    ],
     "equipment_zones": [
       {{
         "id": "zone-1",
-        "label": "Shop / Lab Area",
+        "label": "Open Workshop",
         "x_ft": 0.0,
         "y_ft": 0.0,
         "width_ft": 0.0,
@@ -88,7 +118,7 @@ Respond with ONLY valid JSON (no markdown):
     "right": 0.95,
     "bottom": 0.90
   }},
-  "analysis_notes": "Brief explanation of what you saw, assumptions, and how you mapped the drawing"
+  "analysis_notes": "Brief explanation: scale used, door types found, columns identified, assumptions made"
 }}
 """
 

@@ -259,6 +259,76 @@ def _draw_legend_panel(
 # Door / window openings
 # ---------------------------------------------------------------------------
 
+def _door_zone_ft(door, room_w_ft: float, room_d_ft: float, depth_ft: float) -> tuple[float, float, float, float]:
+    """Return (x, y, w, h) in feet for a door's no-go zone (swing arc or overhead travel path)."""
+    off = door.offset_ft
+    wid = door.width_ft
+    if door.wall == "south":
+        return off, 0.0, wid, depth_ft
+    if door.wall == "north":
+        return off, room_d_ft - depth_ft, wid, depth_ft
+    if door.wall == "west":
+        return 0.0, room_d_ft - off - wid, depth_ft, wid
+    # east
+    return room_w_ft - depth_ft, room_d_ft - off - wid, depth_ft, wid
+
+
+def _draw_door(
+    draw: ImageDraw.ImageDraw,
+    ox: int, oy: int, room_w: int, room_h: int,
+    door,  # Opening model
+    scale: int = SCALE,
+) -> None:
+    """Draw a door with its type-specific clearance zone indicator."""
+    wall = door.wall
+    off = int(door.offset_ft * scale)
+    wid = int(door.width_ft * scale)
+    door_type = getattr(door, "door_type", "swing")
+    font = _load_font(9)
+
+    # Door opening marker on the wall (solid color fill)
+    if wall == "south":
+        wx1, wy1, wx2, wy2 = ox + off, oy + room_h - 4, ox + off + wid, oy + room_h
+    elif wall == "north":
+        wx1, wy1, wx2, wy2 = ox + off, oy, ox + off + wid, oy + 4
+    elif wall == "west":
+        wx1, wy1, wx2, wy2 = ox, oy + room_h - off - wid, ox + 4, oy + room_h - off
+    else:
+        wx1, wy1, wx2, wy2 = ox + room_w - 4, oy + room_h - off - wid, ox + room_w, oy + room_h - off
+
+    draw.rectangle([wx1, wy1, wx2, wy2], fill="#8B4513")
+    draw.text((wx1, wy1 - 12), "D", fill="#8B4513", font=font)
+
+    if door_type == "swing":
+        arc_px = int(door.effective_swing_clearance * scale)
+        if arc_px < 2:
+            return
+        # Swing arc zone — light hatch using dashed rect
+        if wall == "south":
+            zx, zy, zw, zh = ox + off, oy + room_h - arc_px, wid, arc_px
+        elif wall == "north":
+            zx, zy, zw, zh = ox + off, oy, wid, arc_px
+        elif wall == "west":
+            zx, zy, zw, zh = ox, oy + room_h - off - wid, arc_px, wid
+        else:
+            zx, zy, zw, zh = ox + room_w - arc_px, oy + room_h - off - wid, arc_px, wid
+        _dashed_rect(draw, zx, zy, zw, zh, fill=(139, 69, 19, 200), width=1, dash=4, gap=3)
+
+    elif door_type == "overhead":
+        travel_px = wid  # travel depth = door width
+        # Overhead travel zone — dashed with different color
+        if wall == "south":
+            zx, zy, zw, zh = ox + off, oy + room_h - travel_px, wid, travel_px
+        elif wall == "north":
+            zx, zy, zw, zh = ox + off, oy, wid, travel_px
+        elif wall == "west":
+            zx, zy, zw, zh = ox, oy + room_h - off - wid, travel_px, wid
+        else:
+            zx, zy, zw, zh = ox + room_w - travel_px, oy + room_h - off - wid, travel_px, wid
+        _dashed_rect(draw, zx, zy, zw, zh, fill=(180, 60, 0, 220), width=2, dash=8, gap=4)
+        draw.text((zx + 2, zy + 2), "OH", fill="#B43C00", font=font)
+
+
 def _draw_opening(
     draw: ImageDraw.ImageDraw,
     ox: int, oy: int, room_w: int, room_h: int,
@@ -324,11 +394,19 @@ def render_layout_png(req: ExportRequest) -> bytes:
         draw.rectangle([zx, zy, zx + zw, zy + zh], outline="#AAAAAA", width=1, fill="#F0F4FF")
         draw.text((zx + 4, zy + 4), zone.label or zone.id, fill="#666666", font=font_sm)
 
-    # Doors & windows
+    # Doors (with swing arcs / overhead zones) & windows
     for door in fp.doors:
-        _draw_opening(draw, ox, oy, room_w, room_h, door.wall, door.offset_ft, door.width_ft, "#8B4513", "D")
+        _draw_door(draw, ox, oy, room_w, room_h, door, SCALE)
     for win in fp.windows:
         _draw_opening(draw, ox, oy, room_w, room_h, win.wall, win.offset_ft, win.width_ft, "#3B82F6", "W")
+
+    # Structural columns
+    for col in getattr(fp, "columns", []):
+        cx = ox + int(col.x_ft * SCALE)
+        cy = oy + room_h - int((col.y_ft + col.depth_ft) * SCALE)
+        cw = max(4, int(col.width_ft * SCALE))
+        ch = max(4, int(col.depth_ft * SCALE))
+        draw.rectangle([cx, cy, cx + cw, cy + ch], fill="#555555", outline="#222222", width=1)
 
     color_map = _build_color_map(req.layout.placements, eq_by_id)
     number_map = _make_number_map(req.layout.placements)
@@ -421,6 +499,22 @@ def render_layout_on_drawing(
     # Scale-aware line width and font: thicker on larger images
     pix_per_ft = (scale_x + scale_y) / 2
     line_w = max(2, int(pix_per_ft * 0.12))
+
+    # Draw structural columns on the overlay (solid dark rectangles)
+    for col in getattr(fp, "columns", []):
+        cx, cy, cw, ch = ft_to_px(col.x_ft, col.y_ft, col.width_ft, col.depth_ft)
+        draw_ov.rectangle([cx, cy, cx + cw, cy + ch], fill=(60, 60, 60, 220), outline=(20, 20, 20, 255), width=2)
+
+    # Draw door swing arcs and overhead door travel zones on the overlay
+    for door in fp.doors:
+        door_type = getattr(door, "door_type", "swing")
+        if door_type == "swing":
+            arc_ft = door.effective_swing_clearance
+            dx, dy, dw, dh = ft_to_px(*_door_zone_ft(door, fp.width_ft, fp.depth_ft, arc_ft))
+            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(139, 69, 19, 130), width=max(1, line_w), dash=6, gap=4)
+        elif door_type == "overhead":
+            dx, dy, dw, dh = ft_to_px(*_door_zone_ft(door, fp.width_ft, fp.depth_ft, door.width_ft))
+            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(180, 60, 0, 160), width=max(2, line_w), dash=8, gap=5)
     font_num = _load_font_bold(max(9, int(pix_per_ft * 0.55)))
 
     for p in req.layout.placements:
