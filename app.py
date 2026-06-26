@@ -147,13 +147,11 @@ def load_sample_floor_plan() -> dict:
 
 
 def load_sample_equipment_bytes() -> bytes:
+    """Return the sample equipment file (xlsx preferred, csv fallback)."""
+    xlsx = TEMPLATES / "sample-equipment.xlsx"
+    if xlsx.exists():
+        return xlsx.read_bytes()
     return (TEMPLATES / "sample-equipment.csv").read_bytes()
-
-
-def load_sample_equipment_xlsx_bytes() -> bytes:
-    buf = io.BytesIO()
-    pd.read_csv(io.BytesIO(load_sample_equipment_bytes())).to_excel(buf, index=False, engine="openpyxl")
-    return buf.getvalue()
 
 
 def parse_floor_plan_json(raw: str | bytes) -> FloorPlan:
@@ -311,21 +309,17 @@ Get a key at [Google AI Studio](https://aistudio.google.com/apikey).
 
     st.divider()
     st.markdown("**Sample files**")
+    _fp_png = TEMPLATES / "sample-floor-plan.png"
+    if _fp_png.exists():
+        st.download_button(
+            "Download sample floor plan (PNG)",
+            data=_fp_png.read_bytes(),
+            file_name="sample-floor-plan.png",
+            mime="image/png",
+        )
     st.download_button(
-        "Download sample floor plan (JSON)",
-        data=(TEMPLATES / "sample-floor-plan.json").read_bytes(),
-        file_name="sample-floor-plan.json",
-        mime="application/json",
-    )
-    st.download_button(
-        "Download sample equipment (CSV)",
+        "Download sample equipment list (Excel)",
         data=load_sample_equipment_bytes(),
-        file_name="sample-equipment.csv",
-        mime="text/csv",
-    )
-    st.download_button(
-        "Download sample equipment (Excel)",
-        data=load_sample_equipment_xlsx_bytes(),
         file_name="sample-equipment.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -607,7 +601,8 @@ with col_eq:
 
     if st.session_state.get("use_sample_equipment") and not eq_file and equipment is None:
         try:
-            equipment = parse_equipment_file(io.BytesIO(load_sample_equipment_bytes()), "sample-equipment.csv")
+            _sample_name = "sample-equipment.xlsx" if (TEMPLATES / "sample-equipment.xlsx").exists() else "sample-equipment.csv"
+            equipment = parse_equipment_file(io.BytesIO(load_sample_equipment_bytes()), _sample_name)
             st.success(
                 f"Sample data: **{len(equipment)}** types ({sum(e.qty for e in equipment)} units)"
             )
