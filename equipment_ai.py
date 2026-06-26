@@ -63,12 +63,85 @@ def _table_to_text(df: pd.DataFrame) -> str:
     return text
 
 
-def _parse_json_response(text: str) -> dict[str, Any]:
+def _strip_fences(text: str) -> str:
     cleaned = text.strip()
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
     if fence:
         cleaned = fence.group(1).strip()
-    return json.loads(cleaned)
+    return cleaned
+
+
+def _salvage_objects(text: str) -> list[dict[str, Any]]:
+    """Extract every balanced {...} object from `text`, at any nesting depth.
+
+    Tolerant of truncated or malformed JSON: walks the string tracking quote
+    state and a stack of '{' positions, and json-loads each balanced object.
+    A broken object (e.g. from truncation) never balances and is skipped, so
+    the inner equipment items survive even if the outer wrapper is cut off.
+    """
+    objects: list[dict[str, Any]] = []
+    stack: list[int] = []
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}":
+            if stack:
+                start = stack.pop()
+                chunk = text[start : i + 1]
+                try:
+                    objects.append(json.loads(chunk, strict=False))
+                except json.JSONDecodeError:
+                    pass
+    return objects
+
+
+def _parse_json_response(text: str) -> dict[str, Any]:
+    cleaned = _strip_fences(text)
+
+    # strict=False tolerates literal newlines/tabs inside string values, the
+    # most common cause of "Unterminated string" / control-character errors.
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Salvage path: response was truncated or contained bad control characters.
+    objects = _salvage_objects(cleaned)
+    if not objects:
+        raise ValueError("Gemini returned no parseable JSON objects.")
+
+    # The top-level wrapper {"equipment": [...]} may itself be salvageable.
+    for obj in objects:
+        if isinstance(obj.get("equipment"), list):
+            return obj
+
+    # Otherwise treat each salvaged object as an equipment item, keeping only
+    # those that look like equipment (have a name or dimension field).
+    equipment = [
+        obj
+        for obj in objects
+        if any(k in obj for k in ("name", "width_ft", "depth_ft", "id"))
+    ]
+    if not equipment:
+        raise ValueError("Could not recover equipment rows from the response.")
+    return {
+        "equipment": equipment,
+        "mapping_notes": "Recovered from a partial response — please review the table carefully.",
+    }
 
 
 def _build_prompt(table_text: str, user_instructions: str) -> str:
@@ -103,6 +176,12 @@ MAPPING RULES:
 3. UNIT CONVERSION: Convert all dimensions to FEET. If values look like inches (e.g. 30, 48) or have units like "in", "cm", "mm", "m", convert. If a column shows dimensions like "30x48" or "2'-6\"", parse them. Explain assumptions in mapping_notes.
 4. If width/depth cannot be determined for a row, estimate a reasonable footprint for that equipment type and note it in mapping_notes.
 5. Preserve every distinct piece of equipment. Combine duplicate rows into qty when clearly identical.
+
+OUTPUT FORMATTING (critical for valid JSON):
+- Keep every string on a SINGLE line — never put line breaks inside a string value.
+- Keep "notes" and "mapping_notes" concise (under ~150 characters each).
+- Escape any double quotes inside strings (e.g. inches: write 30 in, not 30").
+- Output ONLY the JSON object, with no commentary before or after.
 
 Respond with ONLY valid JSON (no markdown):
 {{
@@ -200,7 +279,7 @@ def smart_parse_equipment(
     generation_config = {
         "temperature": 0.1,
         "response_mime_type": "application/json",
-        "max_output_tokens": 8192,
+        "max_output_tokens": 16384,
     }
 
     last_error: Exception | None = None
