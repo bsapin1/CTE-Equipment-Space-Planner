@@ -48,7 +48,11 @@ st.caption(
 )
 
 
-def render_bounds_preview(image_bytes: bytes, bounds: dict) -> bytes | None:
+def render_bounds_preview(
+    image_bytes: bytes,
+    bounds: dict,
+    room_dims: tuple[float, float] | None = None,
+) -> bytes | None:
     """Draw the room bounds rectangle on the image and return PNG bytes."""
     try:
         from PIL import Image as _Image, ImageDraw as _Draw, ImageFont as _Font
@@ -84,15 +88,18 @@ def render_bounds_preview(image_bytes: bytes, bounds: dict) -> bytes | None:
             draw.line([(cx, cy), (cx + dx, cy)], fill=(37, 99, 235, 255), width=3)
             draw.line([(cx, cy), (cx, cy + dy)], fill=(37, 99, 235, 255), width=3)
 
-        # Label
-        label = "Room boundary"
+        # Label (include dimensions if provided)
+        if room_dims:
+            label = f"Room: {room_dims[0]:.0f}' × {room_dims[1]:.0f}'"
+        else:
+            label = "Room boundary"
         try:
             font = _Font.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 14)
         except OSError:
             font = _Font.load_default()
         text_x = x0 + 6
         text_y = y0 + 6
-        draw.text((text_x + 1, text_y + 1), label, fill=(0, 0, 0, 180), font=font)
+        draw.text((text_x + 1, text_y + 1), label, fill=(0, 0, 0, 200), font=font)
         draw.text((text_x, text_y), label, fill=(37, 99, 235, 255), font=font)
 
         preview = _Image.alpha_composite(img, overlay).convert("RGB")
@@ -400,35 +407,90 @@ with col_fp:
             if notes:
                 st.markdown(f"**Analysis:** {notes}")
 
-            with st.expander("🔲 Adjust room bounds in image", expanded=True):
+            with st.expander("🔲 Adjust room bounds and dimensions", expanded=True):
                 st.caption(
-                    "These sliders define where the room's outer walls sit within the image. "
-                    "Drag them until the overlay lines up with your floor plan. "
-                    "0% = left/top edge of image, 100% = right/bottom edge."
+                    "Set the actual room size, then drag the sliders to align the blue box "
+                    "with the room walls in the image."
                 )
+
+                # ── Room dimension inputs ─────────────────────────────────────
+                fp_cur = st.session_state["drawing_floor_plan"]
+                dim_c1, dim_c2 = st.columns(2)
+                room_w_input = dim_c1.number_input(
+                    "Room width (ft)",
+                    min_value=5.0,
+                    max_value=1000.0,
+                    value=float(fp_cur.width_ft),
+                    step=1.0,
+                    key="room_w_override",
+                    help="Actual room width in feet (east–west)",
+                )
+                room_d_input = dim_c2.number_input(
+                    "Room depth (ft)",
+                    min_value=5.0,
+                    max_value=1000.0,
+                    value=float(fp_cur.depth_ft),
+                    step=1.0,
+                    key="room_d_override",
+                    help="Actual room depth in feet (north–south)",
+                )
+
+                # If the user changed either dimension, rebuild the floor plan
+                # and scale equipment zones proportionally.
+                if abs(room_w_input - fp_cur.width_ft) > 0.01 or abs(room_d_input - fp_cur.depth_ft) > 0.01:
+                    sw = room_w_input / fp_cur.width_ft if fp_cur.width_ft else 1.0
+                    sd = room_d_input / fp_cur.depth_ft if fp_cur.depth_ft else 1.0
+                    updated_zones = [
+                        EquipmentZone(
+                            id=z.id,
+                            label=z.label,
+                            x_ft=round(z.x_ft * sw, 2),
+                            y_ft=round(z.y_ft * sd, 2),
+                            width_ft=round(z.width_ft * sw, 2),
+                            depth_ft=round(z.depth_ft * sd, 2),
+                        )
+                        for z in fp_cur.equipment_zones
+                    ]
+                    updated_fp = FloorPlan(
+                        name=fp_cur.name,
+                        width_ft=room_w_input,
+                        depth_ft=room_d_input,
+                        doors=fp_cur.doors,
+                        windows=fp_cur.windows,
+                        equipment_zones=updated_zones,
+                    )
+                    st.session_state["drawing_floor_plan"] = updated_fp
+                    floor_plan = updated_fp
+
+                # ── Boundary sliders ─────────────────────────────────────────
+                st.markdown("**Image boundary alignment**")
+                st.caption("0% = left/top edge of image · 100% = right/bottom edge")
                 bounds = st.session_state.get("room_bounds_pct", {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0})
                 bc1, bc2 = st.columns(2)
-                b_left = bc1.slider("Left edge (%)", 0, 50, int(bounds["left"] * 100), 1, key="b_left")
-                b_right = bc2.slider("Right edge (%)", 50, 100, int(bounds["right"] * 100), 1, key="b_right")
-                b_top = bc1.slider("Top edge (%)", 0, 50, int(bounds["top"] * 100), 1, key="b_top")
+                b_left   = bc1.slider("Left edge (%)",   0,  50, int(bounds["left"]   * 100), 1, key="b_left")
+                b_right  = bc2.slider("Right edge (%)",  50, 100, int(bounds["right"]  * 100), 1, key="b_right")
+                b_top    = bc1.slider("Top edge (%)",    0,  50, int(bounds["top"]    * 100), 1, key="b_top")
                 b_bottom = bc2.slider("Bottom edge (%)", 50, 100, int(bounds["bottom"] * 100), 1, key="b_bottom")
-                # Persist adjusted bounds
+
                 adjusted_bounds = {
-                    "left": b_left / 100,
-                    "top": b_top / 100,
-                    "right": b_right / 100,
+                    "left":   b_left   / 100,
+                    "top":    b_top    / 100,
+                    "right":  b_right  / 100,
                     "bottom": b_bottom / 100,
                 }
                 st.session_state["room_bounds_pct"] = adjusted_bounds
 
-                # Live preview
+                # Live preview with dimension label
+                cur_fp = st.session_state["drawing_floor_plan"]
                 preview_bytes = render_bounds_preview(
-                    st.session_state["drawing_bg_bytes"], adjusted_bounds
+                    st.session_state["drawing_bg_bytes"],
+                    adjusted_bounds,
+                    room_dims=(cur_fp.width_ft, cur_fp.depth_ft),
                 )
                 if preview_bytes:
                     st.image(
                         preview_bytes,
-                        caption="Room boundary preview — adjust sliders until the blue box aligns with the room walls",
+                        caption="Adjust sliders until the blue box aligns with the room walls",
                         use_container_width=True,
                     )
 
