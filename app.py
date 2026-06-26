@@ -282,7 +282,7 @@ with col_fp:
                 else:
                     with st.spinner("Analyzing floor plan with Gemini…"):
                         try:
-                            fp, notes = analyze_floor_plan_drawing(
+                            fp, notes, bounds = analyze_floor_plan_drawing(
                                 st.session_state["drawing_bytes"],
                                 st.session_state["drawing_name"],
                                 api_key,
@@ -291,9 +291,9 @@ with col_fp:
                             st.session_state["drawing_floor_plan"] = fp
                             st.session_state["drawing_analysis_notes"] = notes
                             st.session_state["drawing_filename"] = drawing_file.name
-                            # Keep bytes for overlay rendering
                             st.session_state["drawing_bg_bytes"] = st.session_state["drawing_bytes"]
                             st.session_state["drawing_bg_name"] = drawing_file.name
+                            st.session_state["room_bounds_pct"] = bounds
                         except Exception as exc:
                             st.error(f"Analysis failed: {exc}")
 
@@ -306,6 +306,27 @@ with col_fp:
             notes = st.session_state.get("drawing_analysis_notes", "")
             if notes:
                 st.markdown(f"**Analysis:** {notes}")
+
+            with st.expander("🔲 Adjust room bounds in image", expanded=True):
+                st.caption(
+                    "These sliders define where the room's outer walls sit within the image. "
+                    "Drag them until the overlay lines up with your floor plan. "
+                    "0% = left/top edge of image, 100% = right/bottom edge."
+                )
+                bounds = st.session_state.get("room_bounds_pct", {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0})
+                bc1, bc2 = st.columns(2)
+                b_left = bc1.slider("Left edge (%)", 0, 50, int(bounds["left"] * 100), 1, key="b_left")
+                b_right = bc2.slider("Right edge (%)", 50, 100, int(bounds["right"] * 100), 1, key="b_right")
+                b_top = bc1.slider("Top edge (%)", 0, 50, int(bounds["top"] * 100), 1, key="b_top")
+                b_bottom = bc2.slider("Bottom edge (%)", 50, 100, int(bounds["bottom"] * 100), 1, key="b_bottom")
+                # Persist adjusted bounds
+                st.session_state["room_bounds_pct"] = {
+                    "left": b_left / 100,
+                    "top": b_top / 100,
+                    "right": b_right / 100,
+                    "bottom": b_bottom / 100,
+                }
+
             with st.expander("Extracted floor plan JSON (review or edit)"):
                 edited = st.text_area(
                     "Floor plan JSON",
@@ -523,9 +544,11 @@ if "layout_result" in st.session_state:
     bg_bytes = st.session_state.get("drawing_bg_bytes")
     bg_name = st.session_state.get("drawing_bg_name", "")
 
+    room_bounds = st.session_state.get("room_bounds_pct")
+
     # Use overlay renderer when we have the original drawing; PDF falls back automatically
     if bg_bytes and not bg_name.lower().endswith(".pdf"):
-        png_bytes = render_layout_on_drawing(export_req, bg_bytes)
+        png_bytes = render_layout_on_drawing(export_req, bg_bytes, room_bounds)
         caption = "Equipment test-fit overlaid on uploaded floor plan"
     else:
         png_bytes = render_layout_png(export_req)

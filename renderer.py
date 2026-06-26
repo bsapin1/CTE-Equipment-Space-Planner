@@ -257,17 +257,28 @@ def _draw_legend(
 def render_layout_on_drawing(
     req: ExportRequest,
     drawing_bytes: bytes,
+    room_bounds_pct: dict | None = None,
 ) -> bytes:
     """Overlay equipment boxes on the original uploaded floor plan image.
 
-    Coordinate mapping assumes the drawing fills the full room extent:
-      pixel_x = x_ft * (img_w / room_w_ft)
-      pixel_y = img_h - (y_ft + h_ft) * (img_h / room_d_ft)   [y flipped: SW origin]
+    room_bounds_pct defines where the room's outer walls sit in the image as
+    fractions of its size: {"left": 0.05, "top": 0.05, "right": 0.92, "bottom": 0.88}
+    Defaults to the full image (0, 0, 1, 1) if not provided.
+
+    Coordinate mapping (SW-origin feet → image pixels):
+      room_px_x = left_pct * img_w
+      room_px_y = top_pct * img_h
+      room_px_w = (right_pct - left_pct) * img_w
+      room_px_h = (bottom_pct - top_pct) * img_h
+
+      pixel_x = room_px_x + x_ft * (room_px_w / room_w_ft)
+      pixel_y = room_px_y + room_px_h - (y_ft + h_ft) * (room_px_h / room_d_ft)  [y flipped]
 
     For PDFs (not rasterisable without Ghostscript), falls back to
     render_layout_png() automatically.
     """
     fp = req.floor_plan
+    bounds = room_bounds_pct or {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0}
 
     # Attempt to open the drawing as an image
     try:
@@ -278,14 +289,20 @@ def render_layout_on_drawing(
 
     img_w, img_h = bg.size
 
-    # Scale factors: feet → pixels
-    scale_x = img_w / fp.width_ft
-    scale_y = img_h / fp.depth_ft
+    # Room region in pixels
+    rpx_left = bounds["left"] * img_w
+    rpx_top = bounds["top"] * img_h
+    rpx_w = (bounds["right"] - bounds["left"]) * img_w
+    rpx_h = (bounds["bottom"] - bounds["top"]) * img_h
+
+    # Scale factors: feet → pixels within the room region
+    scale_x = rpx_w / fp.width_ft
+    scale_y = rpx_h / fp.depth_ft
 
     def ft_to_px(x_ft: float, y_ft: float, w_ft: float, h_ft: float) -> tuple[int, int, int, int]:
-        px = int(x_ft * scale_x)
-        # Flip y: SW origin → image top-left origin
-        py = int(img_h - (y_ft + h_ft) * scale_y)
+        px = int(rpx_left + x_ft * scale_x)
+        # Flip y: SW origin (y=0 at bottom) → image top-left origin
+        py = int(rpx_top + rpx_h - (y_ft + h_ft) * scale_y)
         pw = max(2, int(w_ft * scale_x))
         ph = max(2, int(h_ft * scale_y))
         return px, py, pw, ph
