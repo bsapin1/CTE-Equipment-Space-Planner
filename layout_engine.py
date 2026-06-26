@@ -74,17 +74,18 @@ EQUIPMENT LIST:
 RULES:
 1. Every equipment instance must fit fully inside an equipment zone (x,y are relative to zone southwest corner).
 2. Respect clearances: front, rear, left, right — clearance zones must not overlap between different items.
-3. Items with wall_preferred "yes" should be placed against a zone wall; avoid blocking doors/windows on room walls.
-4. Honor adjacency preferences when possible (place related items within ~6 ft).
-5. Maintain circulation: leave a primary aisle at least 4 ft wide through each zone when possible.
-6. Windows are on room walls — avoid placing tall equipment directly in front of windows.
-7. rotation is degrees: 0, 90, 180, or 270 (clockwise from default orientation).
-8. wall_side indicates which zone wall the equipment back is against: north/south/east/west or "none".
-9. Create unique instance_id for each placed unit (e.g. "WLD-1", "WLD-2" for qty>1).
-10. SWING DOORS: The equipment footprint must NOT be placed inside a swing door arc. The arc extends swing_clearance_ft (or door width_ft if swing_clearance_ft is 0) into the room from the door's wall. Keep this entire zone completely clear.
-11. OVERHEAD DOORS: Equipment footprint AND clearance zones must not encroach on overhead door travel paths. The travel path extends door width_ft into the room along the full width of the door.
-12. SCALE: Use the exact room and zone dimensions given in feet. Equipment dimensions are in feet. Place equipment at realistic positions that respect the stated room size — do not compress or scale dimensions.
-13. ROOM BOUNDS: All equipment footprints and clearance zones must stay fully within the equipment zone boundaries. Clearances must not extend beyond the zone edge.
+3. WALL PLACEMENT: Items with wall_preferred "yes" must be placed against a zone wall. The side of the equipment that has clearance_ft = 0 is the side that goes against the wall — place that side flush with the zone edge. Set wall_side to the matching direction.
+4. DUPLICATE ADJACENCY: Multiple instances of the same equipment_id (qty > 1) must always be placed directly next to each other, side by side. Their clearance envelopes may touch but must not overlap. Group all instances of the same item together.
+5. Honor named adjacency preferences when possible (place related item types within ~6 ft of each other).
+6. Maintain circulation: leave a primary aisle at least 4 ft wide through each zone when possible.
+7. Windows are on room walls — avoid placing tall equipment directly in front of windows.
+8. rotation is degrees: 0, 90, 180, or 270 (clockwise from default orientation).
+9. wall_side indicates which zone wall the equipment back is against: north/south/east/west or "none".
+10. Create unique instance_id for each placed unit (e.g. "WLD-1", "WLD-2" for qty>1).
+11. SWING DOORS: The equipment footprint must NOT be placed inside a swing door arc. The arc extends swing_clearance_ft (or door width_ft if swing_clearance_ft is 0) into the room from the door's wall. Keep this entire zone completely clear.
+12. OVERHEAD DOORS: Equipment footprint AND clearance zones must not encroach on overhead door travel paths. The travel path extends door width_ft into the room along the full width of the door.
+13. SCALE: Use the exact room and zone dimensions given in feet. Equipment dimensions are in feet. Place equipment at realistic positions that respect the stated room size — do not compress or scale dimensions.
+14. ROOM BOUNDS: All equipment footprints and clearance zones must stay fully within the equipment zone boundaries. Clearances must not extend beyond the zone edge.
 
 Respond with ONLY valid JSON (no markdown fences):
 {{
@@ -162,32 +163,42 @@ def _fallback_layout(
     row_clr_height = 0.0
     aisle = 3.0
 
-    for item in equipment:
-        for n in range(item.qty):
-            w, d = item.width_ft, item.depth_ft
-            clr_w = item.clearance_left_ft + w + item.clearance_right_ft
-            clr_h = item.clearance_rear_ft + d + item.clearance_front_ft
+    # Wall-preferred items first so they land on zone edges
+    sorted_items = sorted(equipment, key=lambda e: (0 if e.wall_preferred == "yes" else 1))
 
-            # x,y of equipment within zone (SW corner of footprint)
+    for item in sorted_items:
+        # Determine rotation for wall-preferred items (snap zero-clearance side to west wall)
+        rotation = 0
+        wall_side = "none"
+        if item.wall_preferred == "yes":
+            # Pick the rotation that puts the zero-clearance side against the west wall
+            wxs, _ = _zero_clearance_wall_xs_ys(item, zone, 0)
+            if not wxs:
+                # Try other rotations
+                for rot in (90, 180, 270):
+                    wxs2, _ = _zero_clearance_wall_xs_ys(item, zone, rot)
+                    if wxs2:
+                        rotation = rot
+                        break
+            wall_side = "west"
+
+        w, d = _rotated_dims(item, rotation)
+        clr_w = item.clearance_left_ft + w + item.clearance_right_ft
+        clr_h = item.clearance_rear_ft + d + item.clearance_front_ft
+
+        for n in range(item.qty):
             eq_x = x_cursor + item.clearance_left_ft
             eq_y = y_cursor + item.clearance_rear_ft
 
-            # Would the clearance envelope exceed the zone width?
             if x_cursor + clr_w > zone.width_ft:
-                # Start a new row
                 x_cursor = 0.0
                 y_cursor += row_clr_height + aisle
                 row_clr_height = 0.0
                 eq_x = item.clearance_left_ft
                 eq_y = y_cursor + item.clearance_rear_ft
 
-            # Would the clearance envelope exceed the zone depth?
             if y_cursor + clr_h > zone.depth_ft:
-                break   # no more vertical space — remaining items unplaced
-
-            wall_side = "none"
-            if item.wall_preferred == "yes" and x_cursor < 0.5:
-                wall_side = "west"
+                break
 
             placements.append(
                 Placement(
@@ -196,8 +207,8 @@ def _fallback_layout(
                     zone_id=zone.id,
                     x_ft=round(eq_x, 2),
                     y_ft=round(eq_y, 2),
-                    rotation=0,
-                    wall_side=wall_side,
+                    rotation=rotation,  # type: ignore[arg-type]
+                    wall_side=wall_side,  # type: ignore[arg-type]
                 )
             )
             x_cursor += clr_w
@@ -236,11 +247,10 @@ def _safe_placement(raw: dict) -> Placement:
 
 
 # ---------------------------------------------------------------------------
-# Overlap-repair pass
+# Overlap-repair, wall-snap, and adjacency enforcement
 # ---------------------------------------------------------------------------
 
-_GRID_STEP = 1.0   # ft — resolution of the grid search for conflict resolution
-_MAX_ITERS = 3     # max repair passes (each pass resolves newly discovered conflicts)
+_GRID_STEP = 1.0   # ft — resolution for the grid search
 
 
 def _door_forbidden_rects(floor_plan: FloorPlan) -> list[Rect]:
@@ -306,14 +316,83 @@ def _placement_valid(
     return True
 
 
+def _frange(lo: float, hi: float, step: float) -> list[float]:
+    out: list[float] = []
+    v = lo
+    while v <= hi + 1e-6:
+        out.append(round(v, 2))
+        v += step
+    return out
+
+
+# Map rotation → (equipment frame side → room direction)
+_ROTATION_MAP: dict[int, dict[str, str]] = {
+    0:   {"rear": "south", "front": "north", "left": "west",  "right": "east"},
+    90:  {"rear": "west",  "front": "east",  "left": "south", "right": "north"},
+    180: {"rear": "north", "front": "south", "left": "east",  "right": "west"},
+    270: {"rear": "east",  "front": "west",  "left": "north", "right": "south"},
+}
+
+
+def _zero_clearance_wall_xs_ys(
+    item: EquipmentItem,
+    zone: EquipmentZone,
+    rotation: int,
+) -> tuple[list[float], list[float]]:
+    """
+    Return (wall_xs, wall_ys) — the x/y positions (zone-relative SW corner of footprint)
+    where the zero-clearance side of the item is flush against the zone boundary.
+    Used to snap wall_preferred items correctly.
+    """
+    w, d = _rotated_dims(item, rotation)
+    cl, cr = item.clearance_left_ft, item.clearance_right_ft
+    cf, cb = item.clearance_rear_ft, item.clearance_front_ft
+
+    mapping = _ROTATION_MAP.get(rotation, _ROTATION_MAP[0])
+    clr_by_side = {
+        "rear":  item.clearance_rear_ft,
+        "front": item.clearance_front_ft,
+        "left":  item.clearance_left_ft,
+        "right": item.clearance_right_ft,
+    }
+
+    wall_xs: list[float] = []
+    wall_ys: list[float] = []
+
+    for eq_side, room_dir in mapping.items():
+        if clr_by_side[eq_side] > 0.01:
+            continue  # only snap zero-clearance sides
+        if room_dir == "west":
+            wall_xs.append(0.0)
+        elif room_dir == "east":
+            x = zone.width_ft - w
+            if x >= 0:
+                wall_xs.append(x)
+        elif room_dir == "south":
+            wall_ys.append(0.0)
+        elif room_dir == "north":
+            y = zone.depth_ft - d
+            if y >= 0:
+                wall_ys.append(y)
+
+    return wall_xs, wall_ys
+
+
 def _find_valid_position(
     p: Placement,
     item: EquipmentItem,
     zone: EquipmentZone,
     placed_clrs: list[Rect],
     door_rects: list[Rect],
+    peer_positions: list[tuple[float, float]] | None = None,
 ) -> Placement | None:
-    """Grid-search the zone for the nearest valid position to Gemini's suggestion."""
+    """
+    Grid-search the zone for the nearest valid position to Gemini's suggestion.
+
+    peer_positions: (x, y) of already-placed instances of the same equipment type.
+    When provided, candidate positions are sorted by proximity to peers first,
+    ensuring duplicates cluster together.
+    """
     w, d = _rotated_dims(item, p.rotation)
     cl, cr = item.clearance_left_ft, item.clearance_right_ft
     cf, cb = item.clearance_front_ft, item.clearance_rear_ft
@@ -323,39 +402,79 @@ def _find_valid_position(
     y_min = cb
     y_max = zone.depth_ft - d - cf
 
-    if x_max < x_min or y_max < y_min:
-        return None  # item cannot physically fit in this zone at all
+    if x_max < x_min - 0.01 or y_max < y_min - 0.01:
+        return None  # item cannot physically fit in this zone
 
-    # Build candidate grid, closest to Gemini's position first
-    def frange(lo: float, hi: float, step: float) -> list[float]:
-        out = []
-        v = lo
-        while v <= hi + 1e-6:
-            out.append(round(v, 2))
-            v += step
-        return out
+    x_min = max(x_min, 0.0)
+    y_min = max(y_min, 0.0)
 
-    xs = frange(x_min, x_max, _GRID_STEP)
-    ys = frange(y_min, y_max, _GRID_STEP)
+    # For wall_preferred items, build a priority list of wall-snap positions
+    priority_candidates: list[tuple[float, float]] = []
+    if item.wall_preferred == "yes":
+        wxs, wys = _zero_clearance_wall_xs_ys(item, zone, p.rotation)
+        xs_grid = _frange(x_min, x_max, _GRID_STEP)
+        ys_grid = _frange(y_min, y_max, _GRID_STEP)
+        if wxs:
+            for wx in wxs:
+                if x_min - 0.01 <= wx <= x_max + 0.01:
+                    for y in ys_grid:
+                        priority_candidates.append((wx, y))
+        if wys:
+            for wy in wys:
+                if y_min - 0.01 <= wy <= y_max + 0.01:
+                    for x in xs_grid:
+                        priority_candidates.append((x, wy))
 
-    ox = max(x_min, min(x_max, p.x_ft))
-    oy = max(y_min, min(y_max, p.y_ft))
-    xs.sort(key=lambda v: abs(v - ox))
-    ys.sort(key=lambda v: abs(v - oy))
+    # Full grid fallback
+    xs = _frange(x_min, x_max, _GRID_STEP)
+    ys = _frange(y_min, y_max, _GRID_STEP)
 
-    for y in ys:
-        for x in xs:
-            candidate = Placement(
-                instance_id=p.instance_id,
-                equipment_id=p.equipment_id,
-                zone_id=p.zone_id,
-                x_ft=round(x, 2),
-                y_ft=round(y, 2),
-                rotation=p.rotation,
-                wall_side=p.wall_side,
+    # Sort origin: peers first (for duplicate adjacency), otherwise Gemini's position
+    if peer_positions:
+        def dist_to_peers(xy: tuple[float, float]) -> float:
+            return min(
+                abs(xy[0] - px) + abs(xy[1] - py)
+                for px, py in peer_positions
             )
-            if _placement_valid(candidate, item, zone, placed_clrs, door_rects):
-                return candidate
+        priority_candidates.sort(key=dist_to_peers)
+        full_grid = [(x, y) for y in ys for x in xs]
+        full_grid.sort(key=dist_to_peers)
+    else:
+        ox = max(x_min, min(x_max, p.x_ft))
+        oy = max(y_min, min(y_max, p.y_ft))
+        priority_candidates.sort(key=lambda xy: abs(xy[0] - ox) + abs(xy[1] - oy))
+        full_grid = [(x, y) for y in ys for x in xs]
+        full_grid.sort(key=lambda xy: abs(xy[0] - ox) + abs(xy[1] - oy))
+
+    # Try priority (wall snaps) first, then the full grid
+    seen: set[tuple[float, float]] = set()
+    for x, y in priority_candidates + full_grid:
+        xy = (round(x, 2), round(y, 2))
+        if xy in seen:
+            continue
+        seen.add(xy)
+        # Derive appropriate wall_side for this position
+        ws = p.wall_side
+        if item.wall_preferred == "yes":
+            wxs, wys = _zero_clearance_wall_xs_ys(item, zone, p.rotation)
+            if wxs and abs(x - wxs[0]) < 0.05:
+                mapping = _ROTATION_MAP.get(p.rotation, _ROTATION_MAP[0])
+                ws = next(
+                    (mapping[s] for s, v in {"rear": item.clearance_rear_ft,
+                     "front": item.clearance_front_ft, "left": item.clearance_left_ft,
+                     "right": item.clearance_right_ft}.items() if v < 0.01), ws
+                )
+        candidate = Placement(
+            instance_id=p.instance_id,
+            equipment_id=p.equipment_id,
+            zone_id=p.zone_id,
+            x_ft=xy[0],
+            y_ft=xy[1],
+            rotation=p.rotation,
+            wall_side=ws,  # type: ignore[arg-type]
+        )
+        if _placement_valid(candidate, item, zone, placed_clrs, door_rects):
+            return candidate
 
     return None
 
@@ -366,22 +485,24 @@ def _repair_overlaps(
     floor_plan: FloorPlan,
 ) -> tuple[list[Placement], list[str]]:
     """
-    Post-process Gemini placements to eliminate all clearance overlaps.
+    Post-process placements to guarantee:
+    1. No clearance overlaps.
+    2. Duplicate items (same equipment_id) are placed adjacent to each other.
+    3. wall_preferred items are snapped to the zero-clearance side of the zone wall.
 
     Strategy:
-    1. Sort placements largest-clearance-footprint first so big items lock in first.
-    2. Accept each placement if it's conflict-free; otherwise find the nearest
-       valid grid position within the zone.
-    3. Items that genuinely don't fit are appended at the end (validation flags them).
-
-    Returns (repaired_placements, list_of_repair_notes).
+    - Group placements by equipment_id so all instances of the same item are
+      processed consecutively. The 2nd+ instance in a group gets the peer positions
+      of already-placed instances so _find_valid_position clusters them together.
+    - Within each group, sort by clearance footprint (largest first).
+    - Across groups, wall_preferred items are processed before freestanding items.
     """
     eq_by_id   = {e.id: e for e in equipment}
     zone_by_id = {z.id: z for z in floor_plan.equipment_zones}
     door_rects = _door_forbidden_rects(floor_plan)
     notes: list[str] = []
 
-    def _area(p: Placement) -> float:
+    def _clr_area(p: Placement) -> float:
         item = eq_by_id.get(p.equipment_id)
         if not item:
             return 0.0
@@ -391,40 +512,61 @@ def _repair_overlaps(
             * (d + item.clearance_rear_ft + item.clearance_front_ft)
         )
 
-    # Larger clearance footprints get priority (placed first → harder to dislodge)
-    sorted_ps = sorted(placements, key=lambda p: -_area(p))
+    # Group by equipment_id, preserving Gemini's instance order within each group
+    from collections import defaultdict
+    groups: dict[str, list[Placement]] = defaultdict(list)
+    for p in placements:
+        groups[p.equipment_id].append(p)
+
+    # Order groups: wall_preferred first, then by largest clearance footprint
+    def _group_priority(eq_id: str) -> tuple:
+        item = eq_by_id.get(eq_id)
+        if not item:
+            return (1, 0.0)
+        wall_first = 0 if item.wall_preferred == "yes" else 1
+        avg_area = sum(_clr_area(p) for p in groups[eq_id]) / max(len(groups[eq_id]), 1)
+        return (wall_first, -avg_area)
+
+    ordered_eq_ids = sorted(groups.keys(), key=_group_priority)
 
     placed: list[Placement] = []
     placed_clrs: list[Rect] = []
     unplaced: list[Placement] = []
 
-    for p in sorted_ps:
-        item = eq_by_id.get(p.equipment_id)
-        zone = zone_by_id.get(p.zone_id)
+    for eq_id in ordered_eq_ids:
+        group = groups[eq_id]
+        peer_positions: list[tuple[float, float]] = []   # positions of placed peers in this group
 
-        # Unknown item or zone — keep as-is (validation will flag it)
-        if not item or not zone:
-            placed.append(p)
-            continue
+        for p in group:
+            item = eq_by_id.get(p.equipment_id)
+            zone = zone_by_id.get(p.zone_id)
 
-        if _placement_valid(p, item, zone, placed_clrs, door_rects):
-            placed.append(p)
-            placed_clrs.append(_clearance_rect(p, item, zone))
-        else:
-            repaired = _find_valid_position(p, item, zone, placed_clrs, door_rects)
-            if repaired:
-                placed.append(repaired)
-                placed_clrs.append(_clearance_rect(repaired, item, zone))
-                notes.append(
-                    f"{p.instance_id} repositioned from ({p.x_ft:.1f}, {p.y_ft:.1f}) "
-                    f"to ({repaired.x_ft:.1f}, {repaired.y_ft:.1f}) to resolve overlap"
-                )
+            if not item or not zone:
+                placed.append(p)
+                continue
+
+            if _placement_valid(p, item, zone, placed_clrs, door_rects):
+                placed.append(p)
+                placed_clrs.append(_clearance_rect(p, item, zone))
+                peer_positions.append((p.x_ft, p.y_ft))
             else:
-                unplaced.append(p)
-                notes.append(
-                    f"{p.instance_id} could not be placed without overlap "
-                    f"— insufficient space in zone '{zone.id}'"
+                repaired = _find_valid_position(
+                    p, item, zone, placed_clrs, door_rects,
+                    peer_positions=peer_positions or None,
                 )
+                if repaired:
+                    placed.append(repaired)
+                    placed_clrs.append(_clearance_rect(repaired, item, zone))
+                    peer_positions.append((repaired.x_ft, repaired.y_ft))
+                    notes.append(
+                        f"{p.instance_id} repositioned ({p.x_ft:.1f},{p.y_ft:.1f})"
+                        f"→({repaired.x_ft:.1f},{repaired.y_ft:.1f})"
+                    )
+                else:
+                    unplaced.append(p)
+                    notes.append(
+                        f"{p.instance_id} could not be placed without overlap"
+                    )
 
     return placed + unplaced, notes
 
