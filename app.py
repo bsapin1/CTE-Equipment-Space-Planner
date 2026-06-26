@@ -709,7 +709,14 @@ if "layout_result" in st.session_state:
 
     try:
         eq_safe = _sanitize_equipment(eq)
-        export_req = ExportRequest(floor_plan=fp, equipment=eq_safe, layout=layout)
+        # Use model_validate with dicts to avoid Pydantic v2 class-identity errors
+        # that occur when the same module is loaded under two different import paths
+        # (e.g. `models` vs `server.models` on Streamlit Cloud flat deployments).
+        export_req = ExportRequest.model_validate({
+            "floor_plan": fp.model_dump(),
+            "equipment": [e.model_dump() for e in eq_safe],
+            "layout": layout.model_dump(),
+        })
     except Exception as exc:
         st.error(f"Could not build export request: {exc}")
         st.stop()
