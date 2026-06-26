@@ -282,12 +282,18 @@ with col_fp:
                 else:
                     with st.spinner("Analyzing floor plan with Gemini…"):
                         try:
-                            fp, notes, bounds = analyze_floor_plan_drawing(
+                            result = analyze_floor_plan_drawing(
                                 st.session_state["drawing_bytes"],
                                 st.session_state["drawing_name"],
                                 api_key,
                                 reading_instructions,
                             )
+                            # Support both old (2-tuple) and new (3-tuple) return value
+                            if len(result) == 3:
+                                fp, notes, bounds = result
+                            else:
+                                fp, notes = result
+                                bounds = {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0}
                             st.session_state["drawing_floor_plan"] = fp
                             st.session_state["drawing_analysis_notes"] = notes
                             st.session_state["drawing_filename"] = drawing_file.name

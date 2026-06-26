@@ -61,6 +61,7 @@ RULES:
 5. equipment_zones are areas where CTE equipment may be placed — open floor areas, shop zones, lab areas. Exclude restrooms, closets, corridors unless the user instructions say otherwise.
 6. If multiple equipment areas exist, create a zone for each with a descriptive label.
 7. If room size cannot be determined, use reasonable CTE classroom defaults (~40 x 30 ft) and explain in analysis_notes.
+8. room_bounds_pct: Estimate where the room's outer walls sit within the image as fractions of total image width/height (0.0 = left/top edge, 1.0 = right/bottom edge). Many drawings have title blocks, borders, north arrows, or margins — account for those. If the room fills the entire image, use 0.0/0.0/1.0/1.0.
 
 Respond with ONLY valid JSON (no markdown):
 {{
@@ -81,9 +82,41 @@ Respond with ONLY valid JSON (no markdown):
       }}
     ]
   }},
+  "room_bounds_pct": {{
+    "left": 0.05,
+    "top": 0.05,
+    "right": 0.95,
+    "bottom": 0.90
+  }},
   "analysis_notes": "Brief explanation of what you saw, assumptions, and how you mapped the drawing"
 }}
 """
+
+
+RoomBounds = dict  # {"left": float, "top": float, "right": float, "bottom": float}
+DEFAULT_BOUNDS: RoomBounds = {"left": 0.0, "top": 0.0, "right": 1.0, "bottom": 1.0}
+
+
+def _parse_bounds(raw: dict) -> RoomBounds:
+    b = raw.get("room_bounds_pct", {})
+    if not isinstance(b, dict):
+        return DEFAULT_BOUNDS.copy()
+
+    def _clamp(v: Any, fallback: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(v)))
+        except (TypeError, ValueError):
+            return fallback
+
+    left = _clamp(b.get("left"), 0.0)
+    top = _clamp(b.get("top"), 0.0)
+    right = _clamp(b.get("right"), 1.0)
+    bottom = _clamp(b.get("bottom"), 1.0)
+
+    # Sanity: ensure non-zero area
+    if right <= left or bottom <= top:
+        return DEFAULT_BOUNDS.copy()
+    return {"left": left, "top": top, "right": right, "bottom": bottom}
 
 
 def analyze_floor_plan_drawing(
@@ -91,8 +124,12 @@ def analyze_floor_plan_drawing(
     filename: str,
     api_key: str,
     user_instructions: str = "",
-) -> tuple[FloorPlan, str]:
-    """Return (FloorPlan, analysis_notes) from an image or PDF drawing."""
+) -> tuple[FloorPlan, str, RoomBounds]:
+    """Return (FloorPlan, analysis_notes, room_bounds_pct) from an image or PDF drawing.
+
+    room_bounds_pct is a dict with keys left/top/right/bottom as fractions of
+    image size indicating where the room's outer walls sit in the image.
+    """
     if not api_key.strip():
         raise ValueError("Gemini API key is required to analyze floor plan drawings.")
 
@@ -116,10 +153,11 @@ def analyze_floor_plan_drawing(
             raw = _parse_json_response(response.text)
             floor_data = raw.get("floor_plan", raw)
             notes = str(raw.get("analysis_notes", ""))
+            bounds = _parse_bounds(raw)
             floor_plan = FloorPlan.model_validate(floor_data)
             if not floor_plan.equipment_zones:
                 raise ValueError("No equipment zones identified in the drawing.")
-            return floor_plan, notes
+            return floor_plan, notes, bounds
         except Exception as exc:
             last_error = exc
             continue
