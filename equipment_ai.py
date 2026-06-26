@@ -17,9 +17,15 @@ except ImportError:
     from config import DEFAULT_GEMINI_MODEL
     from models import EquipmentItem
 
-AI_MODELS = (DEFAULT_GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
+# Parsing is a structured extraction task — prefer fast, non-"thinking" models first.
+# gemini-2.0-flash is much faster than 2.5-flash (which spends time reasoning) and is
+# more than capable of column mapping. Slower models are kept only as fallbacks.
+AI_MODELS = ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash")
 EXCEL_EXTENSIONS = (".xlsx", ".xlsm")
-MAX_ROWS = 300
+MAX_ROWS = 200
+MAX_COLS = 30
+MAX_CELL_CHARS = 80
+REQUEST_TIMEOUT_S = 90
 
 
 def read_raw_table(source: str | BinaryIO, filename: str | None = None) -> pd.DataFrame:
@@ -29,16 +35,32 @@ def read_raw_table(source: str | BinaryIO, filename: str | None = None) -> pd.Da
         df = pd.read_excel(source, header=None, dtype=str)
     else:
         df = pd.read_csv(source, header=None, dtype=str, skip_blank_lines=False)
-    return df.fillna("")
+    df = df.fillna("")
+    return _trim_table(df)
+
+
+def _trim_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop fully-empty rows/columns to keep the prompt small and fast."""
+    if df.empty:
+        return df
+    stripped = df.map(lambda c: str(c).strip())
+    non_empty_rows = stripped.apply(lambda r: any(v != "" for v in r), axis=1)
+    non_empty_cols = stripped.apply(lambda c: any(v != "" for v in c), axis=0)
+    trimmed = df.loc[non_empty_rows, non_empty_cols]
+    return trimmed.reset_index(drop=True)
 
 
 def _table_to_text(df: pd.DataFrame) -> str:
     rows = df.values.tolist()[:MAX_ROWS]
     lines = []
     for i, row in enumerate(rows):
-        cells = [str(c).strip() for c in row]
+        cells = [str(c).strip()[:MAX_CELL_CHARS] for c in row[:MAX_COLS]]
         lines.append(f"Row {i}: " + " | ".join(cells))
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    total_rows = len(df)
+    if total_rows > MAX_ROWS:
+        text += f"\n... ({total_rows - MAX_ROWS} more rows omitted)"
+    return text
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:
@@ -175,23 +197,32 @@ def smart_parse_equipment(
     prompt = _build_prompt(table_text, user_instructions)
     genai.configure(api_key=api_key.strip())
 
+    generation_config = {
+        "temperature": 0.1,
+        "response_mime_type": "application/json",
+        "max_output_tokens": 8192,
+    }
+
     last_error: Exception | None = None
     for model_name in AI_MODELS:
         try:
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config={
-                    "temperature": 0.1,
-                    "response_mime_type": "application/json",
-                },
+            model = genai.GenerativeModel(model_name, generation_config=generation_config)
+            response = model.generate_content(
+                prompt,
+                request_options={"timeout": REQUEST_TIMEOUT_S},
             )
-            response = model.generate_content(prompt)
             raw = _parse_json_response(response.text)
             equipment = _coerce_equipment(raw.get("equipment", []))
             notes = str(raw.get("mapping_notes", ""))
             return equipment, notes
         except Exception as exc:
             last_error = exc
-            continue
+            # Only fall back to another model when this one is unavailable
+            # (e.g. 404 / not found / unsupported). For timeouts, quota, or
+            # transient errors, retrying other models just compounds the wait.
+            message = str(exc).lower()
+            if any(token in message for token in ("not found", "404", "not supported", "unsupported", "permission")):
+                continue
+            raise RuntimeError(f"Could not interpret spreadsheet: {exc}") from exc
 
     raise RuntimeError(f"Could not interpret spreadsheet: {last_error}")

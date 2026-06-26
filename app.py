@@ -376,7 +376,7 @@ with col_eq:
             if not api_key:
                 st.error("Gemini API key is required for smart parsing. Add it in Streamlit Secrets.")
             else:
-                with st.spinner("Analyzing spreadsheet with Gemini…"):
+                with st.spinner("Analyzing spreadsheet with Gemini… (usually 5–20s)"):
                     try:
                         parsed, notes = smart_parse_equipment(
                             io.BytesIO(eq_file.getvalue()),
