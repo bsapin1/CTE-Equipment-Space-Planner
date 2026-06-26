@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 try:
-    from .models import Column, EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
+    from .models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
 except ImportError:
-    from models import Column, EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
+    from models import EquipmentItem, EquipmentZone, FloorPlan, LayoutIssue, Opening, Placement
 
 
 @dataclass
@@ -62,10 +62,6 @@ def _equipment_rect(
 
 def _zone_rect(zone: EquipmentZone) -> Rect:
     return Rect(zone.x_ft, zone.y_ft, zone.width_ft, zone.depth_ft)
-
-
-def _column_rect(col: Column) -> Rect:
-    return Rect(col.x_ft, col.y_ft, col.width_ft, col.depth_ft)
 
 
 def _wall_distance(
@@ -143,7 +139,6 @@ def validate_layout(
         for d in floor_plan.doors
         if getattr(d, "door_type", "swing") == "overhead"
     ]
-    column_rects: list[Rect] = [_column_rect(c) for c in getattr(floor_plan, "columns", [])]
 
     clearance_rects: list[tuple[str, Rect]] = []
 
@@ -214,16 +209,6 @@ def validate_layout(
                 issues.append(LayoutIssue(
                     severity="error",
                     message=f"{p.instance_id} clearance encroaches on an overhead door travel path",
-                    equipment_id=p.equipment_id,
-                ))
-                break
-
-        # Columns — clearance rect must not overlap any column
-        for col_rect in column_rects:
-            if clr_rect.intersects(col_rect):
-                issues.append(LayoutIssue(
-                    severity="error",
-                    message=f"{p.instance_id} clearance overlaps a structural column",
                     equipment_id=p.equipment_id,
                 ))
                 break

@@ -69,9 +69,6 @@ DOORS:
    - "passage"  = open cased opening, no door. swing_clearance_ft = 0.
 5. offset_ft on a wall is measured from the west corner (north/south walls) or south corner (east/west walls).
 
-COLUMNS & STRUCTURAL ELEMENTS:
-6. Identify ALL structural columns, piers, or pilasters visible as solid filled squares/rectangles inside or on the perimeter of the room. These are typically small (1-3 ft square). Record each one's SW corner position and size.
-
 WINDOWS:
 7. Identify windows on room walls (door_type = "window" in the doors list is NOT needed — windows go in the windows array with wall/offset_ft/width_ft).
 
@@ -98,9 +95,6 @@ Respond with ONLY valid JSON (no markdown):
       }}
     ],
     "windows": [{{ "wall": "north", "offset_ft": 0.0, "width_ft": 6.0, "door_type": "window", "swing_clearance_ft": 0 }}],
-    "columns": [
-      {{ "id": "col-1", "x_ft": 0.0, "y_ft": 0.0, "width_ft": 1.5, "depth_ft": 1.5 }}
-    ],
     "equipment_zones": [
       {{
         "id": "zone-1",
@@ -118,7 +112,7 @@ Respond with ONLY valid JSON (no markdown):
     "right": 0.95,
     "bottom": 0.90
   }},
-  "analysis_notes": "Brief explanation: scale used, door types found, columns identified, assumptions made"
+  "analysis_notes": "Brief explanation: scale used, door types found, assumptions made"
 }}
 """
 

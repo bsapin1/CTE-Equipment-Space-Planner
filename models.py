@@ -25,15 +25,6 @@ class Opening(BaseModel):
         return self.swing_clearance_ft if self.swing_clearance_ft > 0 else self.width_ft
 
 
-class Column(BaseModel):
-    """Structural column or pier — equipment clearances must not overlap these."""
-    id: str = ""
-    x_ft: float = Field(ge=0, description="SW corner X (feet)")
-    y_ft: float = Field(ge=0, description="SW corner Y (feet)")
-    width_ft: float = Field(default=1.5, gt=0)
-    depth_ft: float = Field(default=1.5, gt=0)
-
-
 class EquipmentZone(BaseModel):
     id: str
     label: str = ""
@@ -49,7 +40,6 @@ class FloorPlan(BaseModel):
     depth_ft: float = Field(gt=0)
     doors: list[Opening] = Field(default_factory=list)
     windows: list[Opening] = Field(default_factory=list)
-    columns: list[Column] = Field(default_factory=list)
     equipment_zones: list[EquipmentZone] = Field(default_factory=list)
 
 

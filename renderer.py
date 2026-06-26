@@ -26,19 +26,12 @@ if TYPE_CHECKING:
 
 SCALE = 14          # pixels per foot (blank renderer)
 MARGIN = 60
-LEGEND_WIDTH = 320
-COLORS = [
-    "#2563EB",  # blue
-    "#16A34A",  # green
-    "#D97706",  # amber
-    "#9333EA",  # purple
-    "#DC2626",  # red
-    "#0891B2",  # cyan
-    "#EA580C",  # orange
-    "#4F46E5",  # indigo
-    "#15803D",  # dark green
-    "#B91C1C",  # dark red
-]
+LEGEND_WIDTH = 280
+
+# All linework is black and white
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+GRAY  = (100, 100, 100)
 
 
 # ---------------------------------------------------------------------------
@@ -76,16 +69,6 @@ def _load_font_bold(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 # ---------------------------------------------------------------------------
 # Drawing primitives
 # ---------------------------------------------------------------------------
-
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    h = hex_color.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-
-
-def _hex_to_rgba(hex_color: str, alpha: int) -> tuple[int, int, int, int]:
-    r, g, b = _hex_to_rgb(hex_color)
-    return r, g, b, alpha
-
 
 def _dashed_line(
     draw: ImageDraw.ImageDraw,
@@ -128,6 +111,20 @@ def _dashed_rect(
     _dashed_line(draw, x,     y + h, x,     y,     fill, width, dash, gap)
 
 
+def _clamp_rect(
+    x: int, y: int, w: int, h: int,
+    min_x: int, min_y: int, max_x: int, max_y: int,
+) -> tuple[int, int, int, int]:
+    """Clamp a rectangle so it stays within [min_x..max_x, min_y..max_y].
+    Returns (x, y, w, h) with w/h reduced as needed (minimum 1 each).
+    """
+    x2 = min(x + w, max_x)
+    y2 = min(y + h, max_y)
+    x  = max(x, min_x)
+    y  = max(y, min_y)
+    return x, y, max(1, x2 - x), max(1, y2 - y)
+
+
 def _centered_text(
     draw: ImageDraw.ImageDraw,
     cx: float, cy: float,
@@ -150,29 +147,23 @@ def _draw_equipment_symbol(
     draw: ImageDraw.ImageDraw,
     ex: int, ey: int, ew: int, eh: int,   # equipment rect in pixels
     cx: int, cy: int, cw: int, ch: int,   # clearance rect in pixels
-    color: str,
     number: str,
     font_num,
     line_width: int = 2,
 ) -> None:
-    """Draw one equipment symbol:
-    - White fill + solid colored border = equipment footprint
-    - Dashed colored lines  = clearance envelope
+    """Draw one equipment symbol (black and white):
+    - White fill + solid black border = equipment footprint
+    - Dashed black lines = clearance envelope
     - Number centered in equipment box
     """
-    rgb = _hex_to_rgb(color)
+    # Clearance envelope — dashed black rect
+    _dashed_rect(draw, cx, cy, cw, ch, fill=BLACK, width=line_width, dash=6, gap=4)
 
-    # Clearance envelope — dashed rect
-    _dashed_rect(draw, cx, cy, cw, ch, fill=rgb, width=line_width, dash=6, gap=4)
-
-    # Equipment footprint — white fill + solid border
-    draw.rectangle([ex, ey, ex + ew, ey + eh], fill=(255, 255, 255), outline=rgb, width=line_width)
+    # Equipment footprint — white fill + solid black border
+    draw.rectangle([ex, ey, ex + ew, ey + eh], fill=WHITE, outline=BLACK, width=line_width)
 
     # Number centered inside equipment box
-    _centered_text(
-        draw, ex + ew / 2, ey + eh / 2, number, font_num,
-        fill=rgb, outline_fill=(255, 255, 255),
-    )
+    _centered_text(draw, ex + ew / 2, ey + eh / 2, number, font_num, fill=BLACK)
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +175,6 @@ def _make_number_map(placements: list[Placement]) -> dict[str, int]:
     return {p.instance_id: i + 1 for i, p in enumerate(placements)}
 
 
-def _build_color_map(
-    placements: list[Placement],
-    eq_by_id: dict[str, EquipmentItem],
-) -> dict[str, str]:
-    categories = sorted(
-        {eq_by_id[p.equipment_id].category for p in placements if p.equipment_id in eq_by_id}
-    )
-    return {cat: COLORS[i % len(COLORS)] for i, cat in enumerate(categories)}
-
-
 # ---------------------------------------------------------------------------
 # Legend
 # ---------------------------------------------------------------------------
@@ -202,7 +183,6 @@ def _draw_legend_panel(
     draw: ImageDraw.ImageDraw,
     placements: list[Placement],
     eq_by_id: dict[str, EquipmentItem],
-    color_map: dict[str, str],
     number_map: dict[str, int],
     lx: int, ly: int,
     fits: bool,
@@ -211,48 +191,45 @@ def _draw_legend_panel(
     fp_name: str = "",
     fp_dims: str = "",
 ) -> None:
-    font_title = _load_font(13)
+    font_title = _load_font_bold(12)
     font = _load_font(11)
     font_sm = _load_font(10)
     font_num = _load_font_bold(11)
 
     if fp_name:
-        draw.text((lx, ly), fp_name, fill="#1a1a2e", font=font_title)
+        draw.text((lx, ly), fp_name, fill=BLACK, font=font_title)
         ly += 18
     if fp_dims:
-        draw.text((lx, ly), fp_dims, fill="#666666", font=font_sm)
+        draw.text((lx, ly), fp_dims, fill=GRAY, font=font_sm)
         ly += 16
 
-    draw.text((lx, ly), "KEY", fill="#1a1a2e", font=font_title)
+    draw.text((lx, ly), "KEY", fill=BLACK, font=font_title)
     ly += 20
 
-    # Legend sample box size
-    box = 18
+    box = 16
     for p in placements:
         item = eq_by_id.get(p.equipment_id)
         if not item:
             continue
-        color = color_map.get(item.category, COLORS[0])
         num = str(number_map.get(p.instance_id, "?"))
-        rgb = _hex_to_rgb(color)
         w, d = _rotated_dims(item, p.rotation)
 
-        # Mini equipment symbol
-        draw.rectangle([lx, ly, lx + box, ly + box], fill=(255, 255, 255), outline=rgb, width=2)
-        _centered_text(draw, lx + box / 2, ly + box / 2, num, font_num, fill=rgb)
+        # Mini B&W equipment symbol
+        draw.rectangle([lx, ly, lx + box, ly + box], fill=WHITE, outline=BLACK, width=2)
+        _centered_text(draw, lx + box / 2, ly + box / 2, num, font_num, fill=BLACK)
 
         label = f"{num}. {item.name}  ({w:.0f}' × {d:.0f}')"
-        draw.text((lx + box + 6, ly + (box - 10) // 2), label, fill="#1a1a2e", font=font_sm)
-        ly += box + 4
+        draw.text((lx + box + 6, ly + (box - 10) // 2), label, fill=BLACK, font=font_sm)
+        ly += box + 5
 
-    ly += 10
-    draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill="#DDDDDD", width=1)
+    ly += 8
+    draw.line([(lx, ly), (lx + LEGEND_WIDTH - 20, ly)], fill=GRAY, width=1)
     ly += 8
 
     if fits:
-        draw.text((lx, ly), f"✓ Layout fits  |  Zone util: {utilization:.0f}%", fill="#15803D", font=font)
+        draw.text((lx, ly), f"Layout fits  |  Zone util: {utilization:.0f}%", fill=BLACK, font=font)
     else:
-        draw.text((lx, ly), f"✗ Need ~{extra_sqft:.0f} more sq ft", fill="#B91C1C", font=font)
+        draw.text((lx, ly), f"Need ~{extra_sqft:.0f} more sq ft", fill=BLACK, font=font)
 
 
 # ---------------------------------------------------------------------------
@@ -402,17 +379,12 @@ def render_layout_png(req: ExportRequest) -> bytes:
     for win in fp.windows:
         _draw_opening(draw, ox, oy, room_w, room_h, win.wall, win.offset_ft, win.width_ft, "#3B82F6", "W")
 
-    # Structural columns
-    for col in getattr(fp, "columns", []):
-        cx = ox + int(col.x_ft * SCALE)
-        cy = oy + room_h - int((col.y_ft + col.depth_ft) * SCALE)
-        cw = max(4, int(col.width_ft * SCALE))
-        ch = max(4, int(col.depth_ft * SCALE))
-        draw.rectangle([cx, cy, cx + cw, cy + ch], fill="#555555", outline="#222222", width=1)
-
-    color_map = _build_color_map(req.layout.placements, eq_by_id)
     number_map = _make_number_map(req.layout.placements)
     font_num = _load_font_bold(max(9, int(SCALE * 0.9)))
+
+    # Room pixel bounds for clamping
+    room_px_x0, room_px_y0 = ox, oy
+    room_px_x1, room_px_y1 = ox + room_w, oy + room_h
 
     for p in req.layout.placements:
         item = eq_by_id.get(p.equipment_id)
@@ -432,14 +404,16 @@ def render_layout_png(req: ExportRequest) -> bytes:
         cw = max(4, int(clr.w * SCALE))
         ch = max(4, int(clr.h * SCALE))
 
-        color = color_map.get(item.category, COLORS[0])
+        # Clamp clearance to room bounds
+        cx, cy, cw, ch = _clamp_rect(cx, cy, cw, ch, room_px_x0, room_px_y0, room_px_x1, room_px_y1)
+
         num = str(number_map[p.instance_id])
-        _draw_equipment_symbol(draw, ex, ey, ew, eh, cx, cy, cw, ch, color, num, font_num)
+        _draw_equipment_symbol(draw, ex, ey, ew, eh, cx, cy, cw, ch, num, font_num)
 
     # Legend
     lx = ox + room_w + 18
     _draw_legend_panel(
-        draw, req.layout.placements, eq_by_id, color_map, number_map,
+        draw, req.layout.placements, eq_by_id, number_map,
         lx=lx, ly=oy,
         fits=req.layout.fits,
         utilization=req.layout.zone_utilization_pct,
@@ -495,30 +469,30 @@ def render_layout_on_drawing(
 
     eq_by_id   = {e.id: e for e in req.equipment}
     zone_by_id = {z.id: z for z in fp.equipment_zones}
-    color_map  = _build_color_map(req.layout.placements, eq_by_id)
     number_map = _make_number_map(req.layout.placements)
 
-    # Scale-aware line width and font: thicker on larger images
+    # Scale-aware line width and font
     pix_per_ft = (scale_x + scale_y) / 2
     line_w = max(2, int(pix_per_ft * 0.12))
+    font_num = _load_font_bold(max(9, int(pix_per_ft * 0.55)))
 
-    # Draw structural columns on the overlay (solid dark rectangles)
-    for col in getattr(fp, "columns", []):
-        cx, cy, cw, ch = ft_to_px(col.x_ft, col.y_ft, col.width_ft, col.depth_ft)
-        draw_ov.rectangle([cx, cy, cx + cw, cy + ch], fill=(60, 60, 60, 220), outline=(20, 20, 20, 255), width=2)
+    # Room pixel region bounds (for clamping clearances)
+    room_px_x0 = int(rpx_left)
+    room_px_y0 = int(rpx_top)
+    room_px_x1 = int(rpx_left + rpx_w)
+    room_px_y1 = int(rpx_top  + rpx_h)
 
-    # Draw door swing arcs and overhead door travel zones on the overlay
+    # Draw door swing arcs and overhead door travel zones on the overlay (dark dashed)
     for door in fp.doors:
         door_type = getattr(door, "door_type", "swing")
         if door_type == "swing":
             sc = getattr(door, "swing_clearance_ft", 0.0)
             arc_ft = sc if sc > 0 else door.width_ft
             dx, dy, dw, dh = ft_to_px(*_door_zone_ft(door, fp.width_ft, fp.depth_ft, arc_ft))
-            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(139, 69, 19, 130), width=max(1, line_w), dash=6, gap=4)
+            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(0, 0, 0, 120), width=max(1, line_w), dash=6, gap=4)
         elif door_type == "overhead":
             dx, dy, dw, dh = ft_to_px(*_door_zone_ft(door, fp.width_ft, fp.depth_ft, door.width_ft))
-            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(180, 60, 0, 160), width=max(2, line_w), dash=8, gap=5)
-    font_num = _load_font_bold(max(9, int(pix_per_ft * 0.55)))
+            _dashed_rect(draw_ov, dx, dy, dw, dh, fill=(0, 0, 0, 140), width=max(2, line_w), dash=8, gap=5)
 
     for p in req.layout.placements:
         item = eq_by_id.get(p.equipment_id)
@@ -532,31 +506,30 @@ def render_layout_on_drawing(
         clr = _clearance_rect(p, item, zone)
         cx, cy, cw, ch = ft_to_px(clr.x, clr.y, clr.w, clr.h)
 
-        color = color_map.get(item.category, COLORS[0])
-        num   = str(number_map[p.instance_id])
-        rgb   = _hex_to_rgb(color)
+        # Clamp clearance rect to room pixel bounds so it never overflows
+        cx, cy, cw, ch = _clamp_rect(cx, cy, cw, ch, room_px_x0, room_px_y0, room_px_x1, room_px_y1)
 
-        # Dashed clearance envelope
-        _dashed_rect(draw_ov, cx, cy, cw, ch, fill=(*rgb, 220), width=line_w, dash=max(4, line_w * 3), gap=max(3, line_w * 2))
+        num = str(number_map[p.instance_id])
 
-        # Solid equipment box — white fill so it stands out on the drawing
-        draw_ov.rectangle([ex, ey, ex + ew, ey + eh], fill=(255, 255, 255, 230), outline=(*rgb, 255), width=line_w)
+        # Dashed black clearance envelope
+        _dashed_rect(draw_ov, cx, cy, cw, ch, fill=(0, 0, 0, 210),
+                     width=line_w, dash=max(4, line_w * 3), gap=max(3, line_w * 2))
+
+        # White-fill equipment box with black border
+        draw_ov.rectangle([ex, ey, ex + ew, ey + eh],
+                          fill=(255, 255, 255, 230), outline=(0, 0, 0, 255), width=line_w)
 
         # Number centered in box
-        _centered_text(
-            draw_ov, ex + ew / 2, ey + eh / 2,
-            num, font_num,
-            fill=(*rgb, 255),
-            outline_fill=(255, 255, 255, 255),
-        )
+        _centered_text(draw_ov, ex + ew / 2, ey + eh / 2, num, font_num,
+                       fill=(0, 0, 0, 255), outline_fill=(255, 255, 255, 255))
 
     canvas = Image.alpha_composite(canvas, overlay)
 
-    # Legend panel
+    # Legend panel (white background strip)
     draw_main = ImageDraw.Draw(canvas)
-    draw_main.rectangle([img_w, 0, canvas_w, canvas_h], fill=(248, 249, 250, 255))
+    draw_main.rectangle([img_w, 0, canvas_w, canvas_h], fill=(255, 255, 255, 255))
     _draw_legend_panel(
-        draw_main, req.layout.placements, eq_by_id, color_map, number_map,
+        draw_main, req.layout.placements, eq_by_id, number_map,
         lx=img_w + 12, ly=16,
         fits=req.layout.fits,
         utilization=req.layout.zone_utilization_pct,
