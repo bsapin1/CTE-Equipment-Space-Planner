@@ -17,7 +17,14 @@ try:
         LayoutResult,
         Placement,
     )
-    from .validation import compute_fit_metrics, validate_layout
+    from .validation import (
+        Rect,
+        _clearance_rect,
+        _equipment_rect,
+        _rotated_dims,
+        compute_fit_metrics,
+        validate_layout,
+    )
 except ImportError:
     from models import (
         EquipmentItem,
@@ -27,7 +34,14 @@ except ImportError:
         LayoutResult,
         Placement,
     )
-    from validation import compute_fit_metrics, validate_layout
+    from validation import (
+        Rect,
+        _clearance_rect,
+        _equipment_rect,
+        _rotated_dims,
+        compute_fit_metrics,
+        validate_layout,
+    )
 
 GEMINI_MODELS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
 
@@ -128,30 +142,51 @@ def _call_gemini(api_key: str, prompt: str) -> dict[str, Any]:
 def _fallback_layout(
     floor_plan: FloorPlan, equipment: list[EquipmentItem]
 ) -> tuple[list[Placement], str]:
-    """Simple row-based placer when Gemini is unavailable."""
+    """
+    Clearance-aware row packer used when Gemini is unavailable.
+
+    Items are placed left-to-right in rows. The cursor tracks the minimum
+    safe x that guarantees no clearance overlap with the previous item.
+    When a row is full, the cursor advances by the tallest clearance envelope
+    in that row (rear + depth + front) plus an aisle gap.
+    """
     if not floor_plan.equipment_zones:
         return [], "No equipment zones defined."
 
     zone = floor_plan.equipment_zones[0]
     placements: list[Placement] = []
-    cursor_x = 1.0
-    cursor_y = 1.0
-    row_height = 0.0
-    aisle = 4.0
+
+    # x_cursor = left edge of CLEARANCE envelope for next item
+    x_cursor = 0.0
+    y_cursor = 0.0   # bottom edge of CLEARANCE envelope for current row
+    row_clr_height = 0.0
+    aisle = 3.0
 
     for item in equipment:
         for n in range(item.qty):
             w, d = item.width_ft, item.depth_ft
-            if cursor_x + w + item.clearance_right_ft > zone.width_ft - 1:
-                cursor_x = 1.0
-                cursor_y += row_height + aisle
-                row_height = 0.0
+            clr_w = item.clearance_left_ft + w + item.clearance_right_ft
+            clr_h = item.clearance_rear_ft + d + item.clearance_front_ft
 
-            if cursor_y + d + item.clearance_front_ft > zone.depth_ft - 1:
-                break
+            # x,y of equipment within zone (SW corner of footprint)
+            eq_x = x_cursor + item.clearance_left_ft
+            eq_y = y_cursor + item.clearance_rear_ft
+
+            # Would the clearance envelope exceed the zone width?
+            if x_cursor + clr_w > zone.width_ft:
+                # Start a new row
+                x_cursor = 0.0
+                y_cursor += row_clr_height + aisle
+                row_clr_height = 0.0
+                eq_x = item.clearance_left_ft
+                eq_y = y_cursor + item.clearance_rear_ft
+
+            # Would the clearance envelope exceed the zone depth?
+            if y_cursor + clr_h > zone.depth_ft:
+                break   # no more vertical space — remaining items unplaced
 
             wall_side = "none"
-            if item.wall_preferred == "yes" and cursor_x < 2.0:
+            if item.wall_preferred == "yes" and x_cursor < 0.5:
                 wall_side = "west"
 
             placements.append(
@@ -159,14 +194,14 @@ def _fallback_layout(
                     instance_id=f"{item.id}-{n + 1}",
                     equipment_id=item.id,
                     zone_id=zone.id,
-                    x_ft=round(cursor_x, 2),
-                    y_ft=round(cursor_y, 2),
+                    x_ft=round(eq_x, 2),
+                    y_ft=round(eq_y, 2),
                     rotation=0,
                     wall_side=wall_side,
                 )
             )
-            cursor_x += w + item.clearance_left_ft + item.clearance_right_ft + 1.0
-            row_height = max(row_height, d)
+            x_cursor += clr_w
+            row_clr_height = max(row_clr_height, clr_h)
 
     return placements, "Fallback grid layout (Gemini unavailable or failed)."
 
@@ -200,6 +235,200 @@ def _safe_placement(raw: dict) -> Placement:
     )
 
 
+# ---------------------------------------------------------------------------
+# Overlap-repair pass
+# ---------------------------------------------------------------------------
+
+_GRID_STEP = 1.0   # ft — resolution of the grid search for conflict resolution
+_MAX_ITERS = 3     # max repair passes (each pass resolves newly discovered conflicts)
+
+
+def _door_forbidden_rects(floor_plan: FloorPlan) -> list[Rect]:
+    """Return room-coordinate Rects for swing arcs and overhead door travel paths."""
+    rw, rd = floor_plan.width_ft, floor_plan.depth_ft
+    rects: list[Rect] = []
+    for door in floor_plan.doors:
+        door_type = getattr(door, "door_type", "swing")
+        off, wid = door.offset_ft, door.width_ft
+        if door_type == "swing":
+            sc = getattr(door, "swing_clearance_ft", 0.0)
+            depth = sc if sc > 0 else wid
+        elif door_type == "overhead":
+            depth = wid
+        else:
+            continue
+        if door.wall == "south":
+            rects.append(Rect(off, 0.0, wid, depth))
+        elif door.wall == "north":
+            rects.append(Rect(off, rd - depth, wid, depth))
+        elif door.wall == "west":
+            rects.append(Rect(0.0, rd - off - wid, depth, wid))
+        else:
+            rects.append(Rect(rw - depth, rd - off - wid, depth, wid))
+    return rects
+
+
+def _placement_valid(
+    p: Placement,
+    item: EquipmentItem,
+    zone: EquipmentZone,
+    placed_clrs: list[Rect],
+    door_rects: list[Rect],
+) -> bool:
+    """Return True if placement has no clearance overlap and fits within the zone."""
+    w, d = _rotated_dims(item, p.rotation)
+    cl, cr = item.clearance_left_ft, item.clearance_right_ft
+    cf, cb = item.clearance_front_ft, item.clearance_rear_ft
+
+    # Clearance must stay inside zone
+    if p.x_ft < cl or p.y_ft < cb:
+        return False
+    if p.x_ft + w + cr > zone.width_ft + 0.01:
+        return False
+    if p.y_ft + d + cf > zone.depth_ft + 0.01:
+        return False
+
+    clr = _clearance_rect(p, item, zone)
+
+    # No overlap with already-placed clearances
+    for pc in placed_clrs:
+        if clr.intersects(pc):
+            return False
+
+    # Equipment footprint must not enter door forbidden zones (translated to zone coords)
+    eq = _equipment_rect(p, item, zone)
+    for dr in door_rects:
+        # door_rects are in room coords; zone sits at (zone.x_ft, zone.y_ft)
+        dr_local = Rect(dr.x - zone.x_ft, dr.y - zone.y_ft, dr.w, dr.h)
+        if eq.intersects(dr_local):
+            return False
+
+    return True
+
+
+def _find_valid_position(
+    p: Placement,
+    item: EquipmentItem,
+    zone: EquipmentZone,
+    placed_clrs: list[Rect],
+    door_rects: list[Rect],
+) -> Placement | None:
+    """Grid-search the zone for the nearest valid position to Gemini's suggestion."""
+    w, d = _rotated_dims(item, p.rotation)
+    cl, cr = item.clearance_left_ft, item.clearance_right_ft
+    cf, cb = item.clearance_front_ft, item.clearance_rear_ft
+
+    x_min = cl
+    x_max = zone.width_ft - w - cr
+    y_min = cb
+    y_max = zone.depth_ft - d - cf
+
+    if x_max < x_min or y_max < y_min:
+        return None  # item cannot physically fit in this zone at all
+
+    # Build candidate grid, closest to Gemini's position first
+    def frange(lo: float, hi: float, step: float) -> list[float]:
+        out = []
+        v = lo
+        while v <= hi + 1e-6:
+            out.append(round(v, 2))
+            v += step
+        return out
+
+    xs = frange(x_min, x_max, _GRID_STEP)
+    ys = frange(y_min, y_max, _GRID_STEP)
+
+    ox = max(x_min, min(x_max, p.x_ft))
+    oy = max(y_min, min(y_max, p.y_ft))
+    xs.sort(key=lambda v: abs(v - ox))
+    ys.sort(key=lambda v: abs(v - oy))
+
+    for y in ys:
+        for x in xs:
+            candidate = Placement(
+                instance_id=p.instance_id,
+                equipment_id=p.equipment_id,
+                zone_id=p.zone_id,
+                x_ft=round(x, 2),
+                y_ft=round(y, 2),
+                rotation=p.rotation,
+                wall_side=p.wall_side,
+            )
+            if _placement_valid(candidate, item, zone, placed_clrs, door_rects):
+                return candidate
+
+    return None
+
+
+def _repair_overlaps(
+    placements: list[Placement],
+    equipment: list[EquipmentItem],
+    floor_plan: FloorPlan,
+) -> tuple[list[Placement], list[str]]:
+    """
+    Post-process Gemini placements to eliminate all clearance overlaps.
+
+    Strategy:
+    1. Sort placements largest-clearance-footprint first so big items lock in first.
+    2. Accept each placement if it's conflict-free; otherwise find the nearest
+       valid grid position within the zone.
+    3. Items that genuinely don't fit are appended at the end (validation flags them).
+
+    Returns (repaired_placements, list_of_repair_notes).
+    """
+    eq_by_id   = {e.id: e for e in equipment}
+    zone_by_id = {z.id: z for z in floor_plan.equipment_zones}
+    door_rects = _door_forbidden_rects(floor_plan)
+    notes: list[str] = []
+
+    def _area(p: Placement) -> float:
+        item = eq_by_id.get(p.equipment_id)
+        if not item:
+            return 0.0
+        w, d = _rotated_dims(item, p.rotation)
+        return (
+            (w + item.clearance_left_ft + item.clearance_right_ft)
+            * (d + item.clearance_rear_ft + item.clearance_front_ft)
+        )
+
+    # Larger clearance footprints get priority (placed first → harder to dislodge)
+    sorted_ps = sorted(placements, key=lambda p: -_area(p))
+
+    placed: list[Placement] = []
+    placed_clrs: list[Rect] = []
+    unplaced: list[Placement] = []
+
+    for p in sorted_ps:
+        item = eq_by_id.get(p.equipment_id)
+        zone = zone_by_id.get(p.zone_id)
+
+        # Unknown item or zone — keep as-is (validation will flag it)
+        if not item or not zone:
+            placed.append(p)
+            continue
+
+        if _placement_valid(p, item, zone, placed_clrs, door_rects):
+            placed.append(p)
+            placed_clrs.append(_clearance_rect(p, item, zone))
+        else:
+            repaired = _find_valid_position(p, item, zone, placed_clrs, door_rects)
+            if repaired:
+                placed.append(repaired)
+                placed_clrs.append(_clearance_rect(repaired, item, zone))
+                notes.append(
+                    f"{p.instance_id} repositioned from ({p.x_ft:.1f}, {p.y_ft:.1f}) "
+                    f"to ({repaired.x_ft:.1f}, {repaired.y_ft:.1f}) to resolve overlap"
+                )
+            else:
+                unplaced.append(p)
+                notes.append(
+                    f"{p.instance_id} could not be placed without overlap "
+                    f"— insufficient space in zone '{zone.id}'"
+                )
+
+    return placed + unplaced, notes
+
+
 def generate_layout(
     floor_plan: FloorPlan,
     equipment: list[EquipmentItem],
@@ -227,6 +456,13 @@ def generate_layout(
         summary = fallback_summary
         if gemini_error:
             summary += f" Gemini error: {gemini_error}"
+
+    # Always run the overlap-repair pass — this guarantees no clearance overlaps
+    # regardless of whether Gemini or the fallback produced the initial positions.
+    placements, repair_notes = _repair_overlaps(placements, equipment, floor_plan)
+    if repair_notes:
+        repair_msg = f"Auto-repaired {len(repair_notes)} placement(s) to eliminate clearance overlaps."
+        summary = (summary + "  " + repair_msg).strip()
 
     issues = validate_layout(floor_plan, equipment, placements)
     if gemini_error and not api_key.strip():
