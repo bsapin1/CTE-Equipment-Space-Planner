@@ -21,7 +21,7 @@ if (ROOT / "server" / "config.py").exists():
     from server.floorplan_vision import analyze_floor_plan_drawing
     from server.layout_engine import generate_layout
     from server.models import EquipmentItem, EquipmentZone, ExportRequest, FloorPlan, Opening
-    from server.renderer import render_layout_png
+    from server.renderer import render_layout_on_drawing, render_layout_png
 else:
     sys.path.insert(0, str(ROOT))
     from config import resolve_gemini_api_key
@@ -30,7 +30,7 @@ else:
     from floorplan_vision import analyze_floor_plan_drawing
     from layout_engine import generate_layout
     from models import EquipmentItem, EquipmentZone, ExportRequest, FloorPlan, Opening
-    from renderer import render_layout_png
+    from renderer import render_layout_on_drawing, render_layout_png
 
 TEMPLATES = ROOT / "templates" if (ROOT / "templates").is_dir() else ROOT
 
@@ -291,6 +291,9 @@ with col_fp:
                             st.session_state["drawing_floor_plan"] = fp
                             st.session_state["drawing_analysis_notes"] = notes
                             st.session_state["drawing_filename"] = drawing_file.name
+                            # Keep bytes for overlay rendering
+                            st.session_state["drawing_bg_bytes"] = st.session_state["drawing_bytes"]
+                            st.session_state["drawing_bg_name"] = drawing_file.name
                         except Exception as exc:
                             st.error(f"Analysis failed: {exc}")
 
@@ -516,8 +519,25 @@ if "layout_result" in st.session_state:
         with st.expander("Issues & warnings", expanded=not layout.fits):
             show_issues(layout.issues)
 
-    png_bytes = render_layout_png(ExportRequest(floor_plan=fp, equipment=eq, layout=layout))
-    st.image(Image.open(io.BytesIO(png_bytes)), caption="Equipment test-fit floor plan", use_container_width=True)
+    export_req = ExportRequest(floor_plan=fp, equipment=eq, layout=layout)
+    bg_bytes = st.session_state.get("drawing_bg_bytes")
+    bg_name = st.session_state.get("drawing_bg_name", "")
+
+    # Use overlay renderer when we have the original drawing; PDF falls back automatically
+    if bg_bytes and not bg_name.lower().endswith(".pdf"):
+        png_bytes = render_layout_on_drawing(export_req, bg_bytes)
+        caption = "Equipment test-fit overlaid on uploaded floor plan"
+    else:
+        png_bytes = render_layout_png(export_req)
+        caption = "Equipment test-fit floor plan"
+
+    st.image(Image.open(io.BytesIO(png_bytes)), caption=caption, use_container_width=True)
+
+    # Also offer the diagrammatic version as an alternative
+    if bg_bytes and not bg_name.lower().endswith(".pdf"):
+        with st.expander("Also show diagrammatic layout"):
+            diag_bytes = render_layout_png(export_req)
+            st.image(Image.open(io.BytesIO(diag_bytes)), use_container_width=True)
 
     st.download_button(
         "Download floor plan (PNG)",
